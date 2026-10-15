@@ -52,12 +52,12 @@ $lines = @(
 
 [IO.File]::WriteAllText($TempReceipt, (($lines -join [string][char]10) + [string][char]10), [Text.UTF8Encoding]::new($false))
 
-$ps = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe"
+$ps = ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
 
 $stdoutPath = Join-Path $RunRoot "receive-negative.stdout.txt"
 $stderrPath = Join-Path $RunRoot "receive-negative.stderr.txt"
 
-$args = @(
+$childArgs = @(
   "-NoProfile",
   "-NonInteractive",
   "-ExecutionPolicy",
@@ -72,7 +72,9 @@ $args = @(
   $TempReceipt
 )
 
-$proc = Start-Process -FilePath $ps -ArgumentList $args -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru -WindowStyle Hidden
+$startArgs = @{ FilePath = $ps; ArgumentList = $childArgs; RedirectStandardOutput = $stdoutPath; RedirectStandardError = $stderrPath; PassThru = $true }
+if($env:OS -eq "Windows_NT"){ $startArgs.WindowStyle = "Hidden" }
+$proc = Start-Process @startArgs
 $proc.WaitForExit()
 
 $code = $proc.ExitCode

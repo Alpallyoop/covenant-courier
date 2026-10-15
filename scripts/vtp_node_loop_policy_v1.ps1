@@ -48,7 +48,7 @@ foreach($frame in $frames){
     throw
   }
 
-  $out = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $PolicyGate -RepoRoot $RepoRoot -FrameDir $claimPath 2>&1
+  $out = & ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $PolicyGate -RepoRoot $RepoRoot -FrameDir $claimPath 2>&1
   $text = ($out | Out-String).Trim()
   $code = $LASTEXITCODE
 
@@ -77,7 +77,7 @@ foreach($frame in $frames){
   $allowCount++
 }
 
-& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $BaseLoop -RepoRoot $RepoRoot -NodeId $NodeId -Once
+& ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $BaseLoop -RepoRoot $RepoRoot -NodeId $NodeId -Once
 if($LASTEXITCODE -ne 0){ throw "VTP_NODE_LOOP_POLICY_FAIL:BASE_LOOP_FAILED" }
 
 Write-Host ("VTP_NODE_LOOP_POLICY_CLAIMS: allow=" + $allowCount + " reject=" + $rejectCount + " skip=" + $skipCount)

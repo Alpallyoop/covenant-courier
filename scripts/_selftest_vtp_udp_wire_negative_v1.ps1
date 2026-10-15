@@ -8,11 +8,17 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = (Resolve-Path $RepoRoot).Path
+
+# Precondition: the demo registry and an open demo session (the wire bindings come from it).
+& ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "scripts\courier_seed_demo_registry_v1.ps1") -RepoRoot $RepoRoot -RecipientNodeId $To | Out-Null
+if($LASTEXITCODE -ne 0){ throw "VTP_WIRE_SELFTEST_FAIL:SEED_REGISTRY" }
+& ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "scripts\courier_open_session_v1.ps1") -RepoRoot $RepoRoot -SessionId "session-alpha-beta-001" -SenderNodeId "node-alpha" -RecipientNodeId $To -NetworkId "courier-internal-net-v1" -SessionRole "message-delivery" | Out-Null
+if($LASTEXITCODE -ne 0){ throw "VTP_WIRE_SELFTEST_FAIL:OPEN_SESSION" }
 $Scripts = Join-Path $RepoRoot "scripts"
 $RunRoot = Join-Path $RepoRoot ("proofs\wire_negative_selftest\" + (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssfffZ"))
 [void][IO.Directory]::CreateDirectory($RunRoot)
 
-$ps = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe"
+$ps = ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
 $send = Join-Path $Scripts "vtp_udp_wire_send_v1.ps1"
 $ingest = Join-Path $Scripts "vtp_udp_wire_ingest_once_v1.ps1"
 $keyLib = Join-Path $Scripts "vtp_wire_key_envelope_v1.ps1"
@@ -83,7 +89,7 @@ function Expect-IngestFail {
   $stdoutPath = Join-Path $RunRoot ($safeName + ".stdout.txt")
   $stderrPath = Join-Path $RunRoot ($safeName + ".stderr.txt")
 
-  $args = @(
+  $childArgs = @(
     "-NoProfile",
     "-NonInteractive",
     "-ExecutionPolicy",
@@ -98,7 +104,9 @@ function Expect-IngestFail {
     $PacketPath
   )
 
-  $proc = Start-Process -FilePath $ps -ArgumentList $args -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath -PassThru -WindowStyle Hidden
+  $startArgs = @{ FilePath = $ps; ArgumentList = $childArgs; RedirectStandardOutput = $stdoutPath; RedirectStandardError = $stderrPath; PassThru = $true }
+if($env:OS -eq "Windows_NT"){ $startArgs.WindowStyle = "Hidden" }
+$proc = Start-Process @startArgs
   $proc.WaitForExit()
 
   $code = $proc.ExitCode
@@ -149,6 +157,29 @@ $badHash.tag_b64 = B64 (Recompute-Tag -Packet $badHash)
 $badHashPath = Join-Path $RunRoot "bad_payload_hash.packet.json"
 Write-PacketJson -Packet $badHash -Path $badHashPath
 Expect-IngestFail -Name "bad-payload-hash" -PacketPath $badHashPath -ExpectedToken "VTP_UDP_WIRE_INGEST_FAIL:PAYLOAD_HASH_MISMATCH"
+
+function Sha256HexText([string]$t){ $sha=[Security.Cryptography.SHA256]::Create(); try { return (($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($t)) | ForEach-Object { $_.ToString("x2") }) -join "") } finally { $sha.Dispose() } }
+
+$unknownSession = Get-Content -LiteralPath $goodPath -Raw | ConvertFrom-Json
+$unknownSession.header.session_id_hash = Sha256HexText "session-not-registered"
+$unknownSessionPath = Join-Path $RunRoot "unknown_session.packet.json"
+Write-PacketJson -Packet $unknownSession -Path $unknownSessionPath
+Expect-IngestFail -Name "unknown-session" -PacketPath $unknownSessionPath -ExpectedToken "VTP_UDP_WIRE_INGEST_FAIL:UNKNOWN_SESSION"
+
+$wrongSender = Get-Content -LiteralPath $goodPath -Raw | ConvertFrom-Json
+$wrongSender.header.sender_node_id_hash = Sha256HexText "node-mallory"
+$wrongSenderPath = Join-Path $RunRoot "wrong_sender.packet.json"
+Write-PacketJson -Packet $wrongSender -Path $wrongSenderPath
+Expect-IngestFail -Name "wrong-sender-binding" -PacketPath $wrongSenderPath -ExpectedToken "VTP_UDP_WIRE_INGEST_FAIL:SENDER_BINDING_MISMATCH"
+
+$oversize = Join-Path $RunRoot "oversize.packet.json"
+[IO.File]::WriteAllBytes($oversize,(New-Object byte[] (1048576 + 1)))
+Expect-IngestFail -Name "oversize-packet" -PacketPath $oversize -ExpectedToken "VTP_UDP_WIRE_INGEST_FAIL:PACKET_TOO_LARGE"
+
+# Replay: the authentic packet is accepted once, then refused.
+& $ps -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $ingest -RepoRoot $RepoRoot -NodeId $To -PacketPath $goodPath *> (Join-Path $RunRoot "good.ingest.txt")
+if($LASTEXITCODE -ne 0){ throw "VTP_WIRE_NEGATIVE_FAIL:GOOD_PACKET_NOT_INGESTED" }
+Expect-IngestFail -Name "replayed-packet" -PacketPath $goodPath -ExpectedToken "VTP_UDP_WIRE_INGEST_FAIL:REPLAY_DETECTED"
 
 Write-Host ("VTP_WIRE_NEGATIVE_SELFTEST_RUN: " + $RunRoot)
 Write-Host "VTP_WIRE_NEGATIVE_SELFTEST_OK"

@@ -13,22 +13,21 @@ $ErrorActionPreference = "Stop"
 if(-not (Test-Path -LiteralPath $PlainPath -PathType Leaf)){ throw "VTP_ENCRYPT_FAIL:MISSING_PLAIN" }
 
 $salt = New-RandomBytes 16
-$nonce = New-RandomBytes 16
+$iv = New-RandomBytes 16
 $key = Derive-KeyFromJoinCode $JoinCode $salt
 $plain = [System.IO.File]::ReadAllBytes($PlainPath)
 $aad = [System.Text.Encoding]::UTF8.GetBytes($Context)
 
-$result = Protect-BytesAesGcm $plain $key $nonce $aad
+$result = Protect-BytesAesCbcHmacSha256 $plain $key $iv $aad
 
 $obj = [ordered]@{
   schema = "vtp.encrypted_payload.v1"
   created_utc = (Get-Date).ToUniversalTime().ToString("o")
-  cipher = "AES-256-GCM"
+  cipher = "AES-256-CBC-HMAC-SHA256"
   kdf = "PBKDF2-HMAC-SHA256-200000"
   context = $Context
-  plain_sha256 = (Get-Sha256HexBytes $plain)
   salt_b64 = [Convert]::ToBase64String($salt)
-  nonce_b64 = [Convert]::ToBase64String($nonce)
+  iv_b64 = [Convert]::ToBase64String($iv)
   tag_b64 = [Convert]::ToBase64String($result.tag)
   ciphertext_b64 = [Convert]::ToBase64String($result.cipher)
 }

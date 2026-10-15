@@ -32,7 +32,7 @@ function ConvertTo-StableObject([object]$Value){
 
   if($Value -is [System.Collections.IDictionary]){
     $ordered = [ordered]@{}
-    $keys = @($Value.Keys | Sort-Object)
+    $keys = @($Value.get_Keys() | Sort-Object)
     foreach($k in $keys){
       $ordered[$k] = ConvertTo-StableObject $Value[$k]
     }

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "covenant_courier.product_receipt_chain.v1",
+  "title": "Covenant Courier product receipt chain entry v1",
+  "description": "One line per product receipt line, in order. receipt_sha256 = SHA-256 of the receipt line bytes without LF; chain_hash = SHA-256 of UTF-8 '<previous_chain_hash>:<receipt_sha256>'; the first previous_chain_hash is 64 zeros. The chain is append-only: existing entries are re-verified against the receipts before new ones are added, and any mismatch fails closed (COVENANT_COURIER_RECEIPT_CHAIN_FAIL:TAMPER_DETECTED).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "index", "previous_chain_hash", "receipt_sha256", "chain_hash"],
+  "properties": {
+    "schema": { "const": "covenant_courier.product_receipt_chain.v1" },
+    "index": { "type": "integer", "minimum": 0 },
+    "previous_chain_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "receipt_sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "chain_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

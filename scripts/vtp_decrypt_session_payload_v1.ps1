@@ -16,6 +16,9 @@ if(-not (Test-Path -LiteralPath $EncryptedPath -PathType Leaf)){
 }
 
 $obj = Get-Content -LiteralPath $EncryptedPath -Raw | ConvertFrom-Json
+if([string]$obj.cipher -ne "AES-256-CBC-HMAC-SHA256"){
+  throw "VTP_SESSION_DECRYPT_FAIL:UNSUPPORTED_CIPHER"
+}
 
 if([string]$obj.session_id -ne $SessionId){
   throw "VTP_SESSION_DECRYPT_FAIL:SESSION_ID_MISMATCH"
@@ -30,15 +33,10 @@ $aad = [System.Text.Encoding]::UTF8.GetBytes([string]$obj.aad)
 $key = Get-VtpSessionKeyMaterial -JoinCode $JoinCode -SessionId $SessionId -Salt $salt
 
 try {
-  $plain = Unprotect-BytesAesGcm $cipher $key $iv $tag $aad
+  $plain = Unprotect-BytesAesCbcHmacSha256 $cipher $key $iv $tag $aad
 }
 catch {
   throw "VTP_SESSION_DECRYPT_FAIL:AUTH_TAG_OR_SESSION_KEY_INVALID"
-}
-
-$actualHash = Get-Sha256HexBytes $plain
-if($actualHash -ne [string]$obj.plain_sha256){
-  throw "VTP_SESSION_DECRYPT_FAIL:PLAIN_HASH_MISMATCH"
 }
 
 $dir = Split-Path -Parent $OutPath

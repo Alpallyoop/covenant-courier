@@ -8,10 +8,16 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = (Resolve-Path $RepoRoot).Path
+
+# Precondition: the demo registry and an open demo session (the wire bindings come from it).
+& ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "scripts\courier_seed_demo_registry_v1.ps1") -RepoRoot $RepoRoot -RecipientNodeId $To | Out-Null
+if($LASTEXITCODE -ne 0){ throw "VTP_WIRE_SELFTEST_FAIL:SEED_REGISTRY" }
+& ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "scripts\courier_open_session_v1.ps1") -RepoRoot $RepoRoot -SessionId "session-alpha-beta-001" -SenderNodeId "node-alpha" -RecipientNodeId $To -NetworkId "courier-internal-net-v1" -SessionRole "message-delivery" | Out-Null
+if($LASTEXITCODE -ne 0){ throw "VTP_WIRE_SELFTEST_FAIL:OPEN_SESSION" }
 $Scripts = Join-Path $RepoRoot "scripts"
 $RunRoot = Join-Path $RepoRoot ("proofs\wire_ingest_selftest\" + (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssfffZ"))
 [void][IO.Directory]::CreateDirectory($RunRoot)
-$ps = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe"
+$ps = ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
 $ingest = Join-Path $Scripts "vtp_udp_wire_ingest_once_v1.ps1"
 $send = Join-Path $Scripts "vtp_udp_wire_send_v1.ps1"
 $packetPath = Join-Path $RunRoot "captured.packet.json"

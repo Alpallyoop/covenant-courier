@@ -46,9 +46,9 @@ Ensure-Dir $Accepted
 Ensure-Dir $Rejected
 
 $cfg = [ordered]@{
-  drop_root = ($Drop.Substring($RepoRoot.Length).TrimStart('\')).Replace('\','/')
-  accepted_root = ($Accepted.Substring($RepoRoot.Length).TrimStart('\')).Replace('\','/')
-  rejected_root = ($Rejected.Substring($RepoRoot.Length).TrimStart('\')).Replace('\','/')
+  drop_root = ($Drop.Substring($RepoRoot.Length).TrimStart('\','/')).Replace('\','/')
+  accepted_root = ($Accepted.Substring($RepoRoot.Length).TrimStart('\','/')).Replace('\','/')
+  rejected_root = ($Rejected.Substring($RepoRoot.Length).TrimStart('\','/')).Replace('\','/')
 }
 Write-Utf8NoBomLf $ConfigPath (($cfg | ConvertTo-Json -Depth 10 -Compress))
 

@@ -5,7 +5,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$PSExe   = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe"
+$PSExe   = ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
 $Scripts = Join-Path $RepoRoot "scripts"
 $NegRoot = Join-Path $RepoRoot "test_vectors\courier_v1\negative\missing_fields"
 

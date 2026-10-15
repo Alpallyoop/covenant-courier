@@ -5,7 +5,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$PSExe = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe"
+$PSExe = ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
 $Self  = Join-Path $RepoRoot "scripts\_selftest_courier_v1.ps1"
 $Lib   = Join-Path $RepoRoot "scripts\_lib_courier_v1.ps1"
 
@@ -79,7 +79,7 @@ if($proc.ExitCode -ne 0){
   foreach($p in @($StdOutPath,$StdErrPath,$SummaryPath,$Self)){
     $h = Get-FileSha256Hex $p
     if($h){
-      $rel = $p.Substring($RepoRoot.Length).TrimStart('\').Replace('\','/')
+      $rel = $p.Substring($RepoRoot.Length).TrimStart('\','/').Replace('\','/')
       [void]$sumLines.Add(($h + " *" + $rel))
     }
   }
@@ -125,7 +125,7 @@ $sumLines = New-Object System.Collections.Generic.List[string]
 foreach($p in @($StdOutPath,$StdErrPath,$SummaryPath,$Self)){
   $h = Get-FileSha256Hex $p
   if($h){
-    $rel = $p.Substring($RepoRoot.Length).TrimStart('\').Replace('\','/')
+    $rel = $p.Substring($RepoRoot.Length).TrimStart('\','/').Replace('\','/')
     [void]$sumLines.Add(($h + " *" + $rel))
   }
 }

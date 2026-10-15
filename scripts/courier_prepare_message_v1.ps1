@@ -29,7 +29,7 @@ function Sha256Hex {
 
 $created = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssfffZ")
 $messageId = "ccmsg-" + $created
-$payloadBytes = [Text.Encoding]::UTF8.GetBytes($PayloadText)
+$payloadBytes = [Text.UTF8Encoding]::new($false).GetBytes($PayloadText)
 $payloadSha = Sha256Hex -Bytes $payloadBytes
 
 $msg = [ordered]@{
@@ -54,7 +54,8 @@ $messagePath = Join-Path $msgDir "message.json"
 $payloadPath = Join-Path $msgDir "payload.txt"
 
 [IO.File]::WriteAllText($messagePath, (($msg | ConvertTo-Json -Depth 20) + [string][char]10), [Text.UTF8Encoding]::new($false))
-[IO.File]::WriteAllText($payloadPath, ($PayloadText + [string][char]10), [Text.UTF8Encoding]::new($false))
+# The payload file holds exactly the bytes payload_sha256 covers.
+[IO.File]::WriteAllBytes($payloadPath, $payloadBytes)
 
 $check = Get-Content -LiteralPath $messagePath -Raw | ConvertFrom-Json
 foreach($name in @("schema","message_id","sender_identity","recipient_identity","sender_node_id","recipient_node_id","session_id","policy_profile","notification_preview","payload_sha256","created_utc")){

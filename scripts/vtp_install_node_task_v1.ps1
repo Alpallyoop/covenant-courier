@@ -13,7 +13,7 @@ if(-not (Test-Path -LiteralPath $LoopPath -PathType Leaf)){
   throw "VTP_INSTALL_TASK_FAIL:MISSING_LOOP_FOREVER"
 }
 
-$PSExe = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe"
+$PSExe = ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
 
 $Action = New-ScheduledTaskAction `
   -Execute $PSExe `

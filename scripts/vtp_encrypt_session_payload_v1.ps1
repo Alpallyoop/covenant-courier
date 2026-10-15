@@ -25,7 +25,7 @@ $plain = [System.IO.File]::ReadAllBytes($PlainPath)
 $aadText = "vtp.session.payload.v1|" + $SessionId + "|" + $FromNodeId + "|" + $ToNodeId
 $aad = [System.Text.Encoding]::UTF8.GetBytes($aadText)
 
-$result = Protect-BytesAesGcm $plain $key $iv $aad
+$result = Protect-BytesAesCbcHmacSha256 $plain $key $iv $aad
 
 $obj = [ordered]@{
   schema = "vtp.session_encrypted_payload.v1"
@@ -36,7 +36,6 @@ $obj = [ordered]@{
   from_node_id = $FromNodeId
   to_node_id = $ToNodeId
   aad = $aadText
-  plain_sha256 = (Get-Sha256HexBytes $plain)
   salt_b64 = [Convert]::ToBase64String($salt)
   iv_b64 = [Convert]::ToBase64String($iv)
   tag_b64 = [Convert]::ToBase64String($result.tag)

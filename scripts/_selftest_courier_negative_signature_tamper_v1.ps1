@@ -5,7 +5,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$PSExe    = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe"
+$PSExe    = ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
 $Scripts  = Join-Path $RepoRoot "scripts"
 $NegRoot  = Join-Path $RepoRoot "test_vectors\courier_v1\negative\signature_tamper"
 
@@ -20,10 +20,10 @@ $SigBad = $MsgBad + ".sig"
 
 . (Join-Path $Scripts "_lib_courier_v1.ps1")
 
-function Run-ChildCapture([string]$File,[string[]]$Args){
+function Run-ChildCapture([string]$File,[string[]]$ChildArgs){
   $psi = New-Object System.Diagnostics.ProcessStartInfo
   $psi.FileName = $PSExe
-  $psi.Arguments = ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}" {1}' -f $File, ($Args -join " "))
+  $psi.Arguments = ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}" {1}' -f $File, ($ChildArgs -join " "))
   $psi.UseShellExecute = $false
   $psi.RedirectStandardOutput = $true
   $psi.RedirectStandardError  = $true
@@ -103,7 +103,8 @@ Write-JsonCanonical $MsgBad $badObj
 
 $r4 = Run-ChildCapture $VerifySigScript @(
   '-RepoRoot', ('"{0}"' -f $RepoRoot),
-  '-MessagePath', ('"{0}"' -f $MsgBad)
+  '-MessagePath', ('"{0}"' -f $MsgBad),
+  '-SignerIdentity', '"courier-local@covenant"'
 )
 
 Write-Utf8NoBomLf (Join-Path $NegRoot "verify.stdout.txt") $r4.StdOut

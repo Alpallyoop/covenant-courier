@@ -35,6 +35,21 @@ function Append-Receipt([string]$Event,[hashtable]$Details){
   Add-Content -LiteralPath (Join-Path $receiptRoot "vtp_outbox.ndjson") -Value ($receipt | ConvertTo-Json -Depth 20 -Compress)
 }
 
+# PowerShell 7 ConvertFrom-Json turns ISO-8601 strings into DateTime objects, and
+# [string] on those drops the offset; Windows PowerShell 5.1 keeps strings. Accept both
+# without any local-time reinterpretation.
+function ConvertTo-UtcDateTime($Value){
+  if($Value -is [datetime]){
+    if($Value.Kind -eq [System.DateTimeKind]::Unspecified){ return [datetime]::SpecifyKind($Value,[System.DateTimeKind]::Utc) }
+    return $Value.ToUniversalTime()
+  }
+  $parsed = [datetimeoffset]::MinValue
+  if(-not [datetimeoffset]::TryParse([string]$Value,[System.Globalization.CultureInfo]::InvariantCulture,[System.Globalization.DateTimeStyles]::AssumeUniversal,[ref]$parsed)){
+    throw "VTP_OUTBOX_FAIL:BAD_NEXT_ATTEMPT_UTC"
+  }
+  return $parsed.UtcDateTime
+}
+
 Ensure-Dir $QueueRoot
 Ensure-Dir $DestinationDropRoot
 
@@ -62,7 +77,7 @@ foreach($item in $items){
     continue
   }
 
-  $next = [datetime]::Parse([string]$meta.next_attempt_utc).ToUniversalTime()
+  $next = ConvertTo-UtcDateTime $meta.next_attempt_utc
   if($next -gt $now){
     continue
   }

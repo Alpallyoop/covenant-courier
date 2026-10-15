@@ -12,7 +12,10 @@ $Expected = @(
   "covenant_courier.message.v1.json",
   "covenant_courier.notification.v1.json",
   "covenant_courier.policy_decision.v1.json",
-  "covenant_courier.product_receipt.v1.json"
+  "covenant_courier.product_receipt.v1.json",
+  "covenant_courier.delivery.v1.json",
+  "covenant_courier.product_policy.v1.json",
+  "covenant_courier.product_receipt_chain.v1.json"
 )
 
 function Require-Prop {
@@ -57,5 +60,18 @@ foreach($fileName in $Expected){
 
   Write-Host ("COVENANT_COURIER_SCHEMA_OK: " + $fileName)
 }
+
+# The shipped delivery policy must name its schema, a default profile that exists, and only
+# profiles with the closed field set.
+$policyPath = Join-Path $RepoRoot "policy\courier_product_policy_v1.json"
+if(-not (Test-Path -LiteralPath $policyPath -PathType Leaf)){ throw "COVENANT_COURIER_SCHEMA_TEST_FAIL:MISSING_PRODUCT_POLICY" }
+$policy = Get-Content -LiteralPath $policyPath -Raw | ConvertFrom-Json
+if([string]$policy.schema -ne "covenant_courier.product_policy.v1"){ throw "COVENANT_COURIER_SCHEMA_TEST_FAIL:PRODUCT_POLICY_SCHEMA" }
+if($policy.profiles.PSObject.Properties.Name -notcontains [string]$policy.default_profile){ throw "COVENANT_COURIER_SCHEMA_TEST_FAIL:PRODUCT_POLICY_DEFAULT_PROFILE" }
+$allowedProfileFields = @("allowed_recipient_nodes","max_payload_bytes","require_utf8_payload","restricted_dictionary","restricted_action","notification_display_mode","covenant_gate","covenant_gate_signer")
+foreach($p in $policy.profiles.PSObject.Properties){
+  foreach($n in $p.Value.PSObject.Properties.Name){ if($allowedProfileFields -notcontains $n){ throw ("COVENANT_COURIER_SCHEMA_TEST_FAIL:PRODUCT_POLICY_UNKNOWN_FIELD:" + $p.Name + ":" + $n) } }
+}
+Write-Host "COVENANT_COURIER_SCHEMA_OK: policy/courier_product_policy_v1.json"
 
 Write-Host "COVENANT_COURIER_SCHEMA_TEST_OK"

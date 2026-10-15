@@ -11,7 +11,7 @@ $steps = @(
 
 foreach($s in $steps){
   $script = Join-Path $PSScriptRoot $s[0]
-  $out = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script -RepoRoot $RepoRoot 2>&1
+  $out = & ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $script -RepoRoot $RepoRoot 2>&1
   $text = ($out | Out-String)
   if($LASTEXITCODE -ne 0){ throw "VTP_DEV_FAST_FAIL:$($s[0])" }
   if($text -notmatch [regex]::Escape($s[1])){ throw "VTP_DEV_FAST_MISSING_TOKEN:$($s[1])" }

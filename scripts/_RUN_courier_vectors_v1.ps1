@@ -1,10 +1,15 @@
 param(
   [Parameter(Mandatory=$true)][string]$RepoRoot,
-  [string]$FreezeDir = "C:\dev\covenant-courier\proofs\freeze\transport_hardening_20260409T220543Z"
+  [string]$FreezeDir
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+$RepoRoot = (Resolve-Path $RepoRoot).Path
+if([string]::IsNullOrWhiteSpace($FreezeDir)){
+  $FreezeDir = Join-Path $RepoRoot "proofs\freeze\transport_hardening_20260409T220543Z"
+}
 
 function Ensure-Dir([string]$Path){
   if(-not (Test-Path -LiteralPath $Path)){
@@ -21,7 +26,7 @@ function Get-Sha256Hex([string]$Path){
 }
 
 function Get-RelPath([string]$Root,[string]$Path){
-  $rel = $Path.Substring($Root.Length).TrimStart('\')
+  $rel = $Path.Substring($Root.Length).TrimStart('\','/')
   return $rel.Replace('\','/')
 }
 

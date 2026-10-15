@@ -1,5 +1,7 @@
 param(
-  [string]$RepoRoot = "."
+  [string]$RepoRoot = ".",
+  # -Full adds the governed-delivery, integration-receipt, trust-import and VTP v2 proofs.
+  [switch]$Full
 )
 
 Set-StrictMode -Version Latest
@@ -27,7 +29,7 @@ function Run-Step {
 
   Write-Host ("COVENANT_COURIER_VERIFY_STEP_START: " + $Name)
 
-  $ps = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe"
+  $ps = ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
   $out = & $ps -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Script @ChildArgs 2>&1
   $code = $LASTEXITCODE
   $text = ($out | Out-String)
@@ -53,5 +55,14 @@ Run-Step -Name "receive" -Script $Courier -ChildArgs @("receive","-RepoRoot",$Re
 Run-Step -Name "receipts" -Script $Courier -ChildArgs @("receipts","-RepoRoot",$RepoRoot) -ExpectedToken "COVENANT_COURIER_RECEIPTS_OK"
 Run-Step -Name "receipt-chain" -Script $Courier -ChildArgs @("receipt-chain","-RepoRoot",$RepoRoot) -ExpectedToken "COVENANT_COURIER_RECEIPT_CHAIN_OK"
 Run-Step -Name "vtp-verify" -Script $Vtp -ChildArgs @("verify","-RepoRoot",$RepoRoot) -ExpectedToken "VTP_VERIFY_ALL_OK"
+
+if($Full){
+  Run-Step -Name "deliver-selftest" -Script (Join-Path $RepoRoot "scripts\_selftest_covenant_courier_deliver_v1.ps1") -ChildArgs @("-RepoRoot",$RepoRoot) -ExpectedToken "COVENANT_COURIER_DELIVER_SELFTEST_OK"
+  Run-Step -Name "integration-receipts-selftest" -Script (Join-Path $RepoRoot "scripts\_selftest_constellation_integration_receipts_v1.ps1") -ChildArgs @("-RepoRoot",$RepoRoot) -ExpectedToken "CONSTELLATION_INTEGRATION_RECEIPTS_SELFTEST_OK"
+  Run-Step -Name "trust-import-selftest" -Script (Join-Path $RepoRoot "scripts\_selftest_courier_trust_import_v1.ps1") -ChildArgs @("-RepoRoot",$RepoRoot) -ExpectedToken "COURIER_TRUST_IMPORT_SELFTEST_OK"
+  Run-Step -Name "integration-receipts-verify" -Script (Join-Path $RepoRoot "scripts\courier_integration_receipts_v1.ps1") -ChildArgs @("-RepoRoot",$RepoRoot,"verify") -ExpectedToken "COURIER_INTEGRATION_RECEIPTS_VERIFY_OK"
+  Run-Step -Name "vtp2-verify" -Script (Join-Path $RepoRoot "vtp2.ps1") -ChildArgs @("verify") -ExpectedToken "VTP2_SELFTEST_OK"
+  Write-Host "COVENANT_COURIER_VERIFY_ALL_OK"
+}
 
 Write-Host "COVENANT_COURIER_VERIFY_OK"

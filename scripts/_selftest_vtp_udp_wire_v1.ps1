@@ -9,6 +9,12 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "vtp_wire_key_envelope_v1.ps1")
 
 $RepoRoot = (Resolve-Path $RepoRoot).Path
+
+# Precondition: the demo registry and an open demo session (the wire bindings come from it).
+& ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "scripts\courier_seed_demo_registry_v1.ps1") -RepoRoot $RepoRoot -RecipientNodeId $To | Out-Null
+if($LASTEXITCODE -ne 0){ throw "VTP_WIRE_SELFTEST_FAIL:SEED_REGISTRY" }
+& ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "scripts\courier_open_session_v1.ps1") -RepoRoot $RepoRoot -SessionId "session-alpha-beta-001" -SenderNodeId "node-alpha" -RecipientNodeId $To -NetworkId "courier-internal-net-v1" -SessionRole "message-delivery" | Out-Null
+if($LASTEXITCODE -ne 0){ throw "VTP_WIRE_SELFTEST_FAIL:OPEN_SESSION" }
 $Scripts = Join-Path $RepoRoot "scripts"
 $Runtime = Join-Path $RepoRoot "runtime\wire_udp"
 $RunRoot = Join-Path $RepoRoot ("proofs\wire_udp_selftest\" + (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssfffZ"))
@@ -36,7 +42,7 @@ $udp = New-Object Net.Sockets.UdpClient($Port)
 $remote = New-Object Net.IPEndPoint([Net.IPAddress]::Any,0)
 try {
   $async = $udp.BeginReceive($null,$null)
-  powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $send -RepoRoot $RepoRoot -To $To -HostName "127.0.0.1" -Port $Port
+  & ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $send -RepoRoot $RepoRoot -To $To -HostName "127.0.0.1" -Port $Port
   if($LASTEXITCODE -ne 0){ throw "VTP_UDP_WIRE_SELFTEST_FAIL:SEND_EXIT" }
   if(-not $async.AsyncWaitHandle.WaitOne(10000)){ throw "VTP_UDP_WIRE_SELFTEST_FAIL:RECEIVE_TIMEOUT" }
   $bytes = $udp.EndReceive($async,[ref]$remote)

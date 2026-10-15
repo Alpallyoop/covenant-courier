@@ -5,7 +5,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$PSExe = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe"
+$PSExe = ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
 
 $RegSelf = Join-Path $PSScriptRoot "_selftest_courier_registry_v1.ps1"
 $Bootstrap = Join-Path $PSScriptRoot "courier_bootstrap_local_trust_v1.ps1"
@@ -44,7 +44,7 @@ if($LASTEXITCODE -ne 0){ throw ("COURIER_NODE2NODE_NEG_FAIL:BOOTSTRAP_EXIT_" + $
 
 & $PSExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Pipeline `
   -RepoRoot $RepoRoot `
-  -InputDir "$RepoRoot\test_vectors\courier_v1\transport_hardening\prep"
+  -InputDir (Join-Path $RepoRoot "test_vectors\courier_v1\transport_hardening\prep")
 if($LASTEXITCODE -ne 0){ throw ("COURIER_NODE2NODE_NEG_FAIL:PIPELINE_EXIT_" + $LASTEXITCODE) }
 
 $MessagePath = Join-Path $RepoRoot "test_vectors\courier_v1\transport_hardening\prep\message.tokenized.json"

@@ -1,0 +1,33 @@
+{
+  "schema": "covenant_courier.product_policy.v1",
+  "default_profile": "default",
+  "profiles": {
+    "default": {
+      "allowed_recipient_nodes": ["node-beta"],
+      "max_payload_bytes": 786432,
+      "require_utf8_payload": false,
+      "restricted_dictionary": "policies/lexicon/restricted_dictionary_v1.json",
+      "restricted_action": "quarantine",
+      "notification_display_mode": "generic",
+      "covenant_gate": "off"
+    },
+    "public": {
+      "allowed_recipient_nodes": ["node-beta"],
+      "max_payload_bytes": 786432,
+      "require_utf8_payload": true,
+      "restricted_dictionary": "policies/lexicon/restricted_dictionary_v1.json",
+      "restricted_action": "redact_notification",
+      "notification_display_mode": "full_safe",
+      "covenant_gate": "off"
+    },
+    "confidential": {
+      "allowed_recipient_nodes": ["node-beta"],
+      "max_payload_bytes": 262144,
+      "require_utf8_payload": false,
+      "restricted_dictionary": "policies/lexicon/restricted_dictionary_v1.json",
+      "restricted_action": "reject",
+      "notification_display_mode": "minimal",
+      "covenant_gate": "required"
+    }
+  }
+}
