@@ -14,7 +14,7 @@ function Fail([string]$Code){
   throw $Code
 }
 
-$SSHKeygen = Join-Path $env:WINDIR "System32\OpenSSH\ssh-keygen.exe"
+$SSHKeygen = $(if($env:WINDIR -and (Test-Path -LiteralPath (Join-Path $env:WINDIR "System32\OpenSSH\ssh-keygen.exe"))){ Join-Path $env:WINDIR "System32\OpenSSH\ssh-keygen.exe" } else { $c = Get-Command ssh-keygen -ErrorAction SilentlyContinue; if($null -eq $c){ throw "COURIER_FAIL:SSH_KEYGEN_NOT_FOUND" }; $c.Source })
 if(-not (Test-Path -LiteralPath $SSHKeygen)){
   Fail ("SIGN_FAIL:MISSING_SSH_KEYGEN:" + $SSHKeygen)
 }

@@ -5,7 +5,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$PSExe = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe"
+$PSExe = ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
 
 $Tier0      = Join-Path $PSScriptRoot "_RUN_vtp_tier0_full_green_v1.ps1"
 $Trust      = Join-Path $PSScriptRoot "_selftest_vtp_trust_bootstrap_v1.ps1"
@@ -35,7 +35,7 @@ function Get-Sha256Hex([string]$Path){
 }
 
 function Get-RelPath([string]$Root,[string]$Path){
-  return $Path.Substring($Root.Length).TrimStart('\').Replace('\','/')
+  return $Path.Substring($Root.Length).TrimStart('\','/').Replace('\','/')
 }
 
 function Run-Step([string]$Name,[string]$Script){

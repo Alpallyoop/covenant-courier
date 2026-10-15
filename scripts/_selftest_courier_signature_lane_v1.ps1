@@ -5,7 +5,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$PSExe = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe"
+$PSExe = ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
 $Scripts = Join-Path $RepoRoot "scripts"
 
 $BootstrapScript = Join-Path $Scripts "courier_bootstrap_local_trust_v1.ps1"
@@ -51,7 +51,8 @@ if($LASTEXITCODE -ne 0){
 & $PSExe -NoProfile -NonInteractive -ExecutionPolicy Bypass `
   -File $VerifySigScript `
   -RepoRoot $RepoRoot `
-  -MessagePath $Msg
+  -MessagePath $Msg `
+  -SignerIdentity "courier-local@covenant"
 if($LASTEXITCODE -ne 0){
   throw ("SIG_SELFTEST_FAIL:VERIFY_SIG_EXIT_" + $LASTEXITCODE)
 }

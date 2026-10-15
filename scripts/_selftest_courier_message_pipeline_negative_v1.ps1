@@ -5,7 +5,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$PSExe      = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe"
+$PSExe      = ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
 $Scripts    = Join-Path $RepoRoot "scripts"
 $NegRoot    = Join-Path $RepoRoot "test_vectors\courier_v1\pipeline_negative"
 $PolicyRoot = Join-Path $RepoRoot "policies\lexicon"
@@ -209,7 +209,7 @@ Write-JsonCanonical $tokenized $tokObj
 
 $r5 = Run-ChildCapture `
   -File $VerifySigScript `
-  -ArgumentString ('-RepoRoot "{0}" -MessagePath "{1}"' -f $RepoRoot, $tokenized)
+  -ArgumentString ('-RepoRoot "{0}" -MessagePath "{1}" -SignerIdentity "courier-local@covenant"' -f $RepoRoot, $tokenized)
 
 Assert-FailToken "tamper_after_sign" "COURIER_VERIFY_FAIL:SIG_VERIFY_FAIL" $r5
 
@@ -260,7 +260,7 @@ if(Test-Path -LiteralPath $sigPath){
 
 $r7 = Run-ChildCapture `
   -File $VerifySigScript `
-  -ArgumentString ('-RepoRoot "{0}" -MessagePath "{1}"' -f $RepoRoot, $tokenized)
+  -ArgumentString ('-RepoRoot "{0}" -MessagePath "{1}" -SignerIdentity "courier-local@covenant"' -f $RepoRoot, $tokenized)
 
 Assert-FailToken "missing_signature" "COURIER_VERIFY_FAIL:MISSING_SIGNATURE" $r7
 

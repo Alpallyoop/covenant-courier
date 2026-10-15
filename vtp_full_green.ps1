@@ -17,7 +17,7 @@ if(-not (Test-Path -LiteralPath $Vtp -PathType Leaf)){
 function Run-Vtp {
   param([string[]]$ChildArgs)
 
-  $ps = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe"
+  $ps = ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
   $out = & $ps -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Vtp @ChildArgs 2>&1
   $code = $LASTEXITCODE
   $text = ($out | Out-String)

@@ -3,7 +3,7 @@ param([string]$RepoRoot=".")
 $RepoRoot = (Resolve-Path $RepoRoot).Path
 $Scripts = Join-Path $RepoRoot "scripts"
 
-& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+& ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -ExecutionPolicy Bypass `
   -File (Join-Path $Scripts "courier_open_session_v1.ps1") `
   -RepoRoot $RepoRoot `
   -SessionId "session-alpha-beta-001" `

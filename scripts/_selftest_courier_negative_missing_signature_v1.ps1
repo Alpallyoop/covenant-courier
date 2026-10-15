@@ -5,7 +5,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$PSExe = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe"
+$PSExe = ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
 $Scripts = Join-Path $RepoRoot "scripts"
 
 $VerifySigScript = Join-Path $Scripts "courier_verify_signature_v1.ps1"
@@ -25,7 +25,7 @@ if(Test-Path -LiteralPath $Sig){
 $psi = New-Object System.Diagnostics.ProcessStartInfo
 $psi.FileName = $PSExe
 $psi.Arguments = (
-  '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}" -RepoRoot "{1}" -MessagePath "{2}"' -f
+  '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{0}" -RepoRoot "{1}" -MessagePath "{2}" -SignerIdentity "courier-local@covenant"' -f
   $VerifySigScript, $RepoRoot, $Msg
 )
 $psi.UseShellExecute = $false

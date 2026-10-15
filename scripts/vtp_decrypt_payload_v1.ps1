@@ -13,22 +13,18 @@ if(-not (Test-Path -LiteralPath $EncryptedPath -PathType Leaf)){ throw "VTP_DECR
 
 $obj = Get-Content -LiteralPath $EncryptedPath -Raw | ConvertFrom-Json
 $salt = [Convert]::FromBase64String([string]$obj.salt_b64)
-$nonce = [Convert]::FromBase64String([string]$obj.nonce_b64)
+if([string]$obj.cipher -ne "AES-256-CBC-HMAC-SHA256"){ throw "VTP_DECRYPT_FAIL:UNSUPPORTED_CIPHER" }
+$iv = [Convert]::FromBase64String([string]$obj.iv_b64)
 $tag = [Convert]::FromBase64String([string]$obj.tag_b64)
 $cipher = [Convert]::FromBase64String([string]$obj.ciphertext_b64)
 $aad = [System.Text.Encoding]::UTF8.GetBytes([string]$obj.context)
 $key = Derive-KeyFromJoinCode $JoinCode $salt
 
 try {
-  $plain = Unprotect-BytesAesGcm $cipher $key $nonce $tag $aad
+  $plain = Unprotect-BytesAesCbcHmacSha256 $cipher $key $iv $tag $aad
 }
 catch {
   throw "VTP_DECRYPT_FAIL:AUTH_TAG_OR_JOIN_CODE_INVALID"
-}
-
-$actualHash = Get-Sha256HexBytes $plain
-if($actualHash -ne [string]$obj.plain_sha256){
-  throw "VTP_DECRYPT_FAIL:PLAIN_HASH_MISMATCH"
 }
 
 $dir = Split-Path -Parent $OutPath

@@ -5,7 +5,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$PSExe = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe"
+$PSExe = ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
 
 $RegistrySelftest  = Join-Path $PSScriptRoot "_selftest_courier_registry_v1.ps1"
 $NodePositive      = Join-Path $PSScriptRoot "_selftest_courier_node_to_node_positive_v1.ps1"
@@ -35,7 +35,7 @@ function Get-Sha256Hex([string]$Path){
 }
 
 function Get-RelPath([string]$Root,[string]$Path){
-  $rel = $Path.Substring($Root.Length).TrimStart('\')
+  $rel = $Path.Substring($Root.Length).TrimStart('\','/')
   return $rel.Replace('\','/')
 }
 

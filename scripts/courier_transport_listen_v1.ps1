@@ -48,15 +48,29 @@ function Read-RegistryJson([string]$Path,[string]$FailCode){
   return (Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json)
 }
 
-$PSExe     = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe"
+function Resolve-FrameChildPath([string]$FrameRoot,[string]$RelativePath,[string]$FailCode){
+  if([string]::IsNullOrWhiteSpace($RelativePath)){ throw $FailCode }
+  if([System.IO.Path]::IsPathRooted($RelativePath)){ throw $FailCode }
+  $sep = [System.IO.Path]::DirectorySeparatorChar
+  $root = [System.IO.Path]::GetFullPath($FrameRoot).TrimEnd('\','/') + $sep
+  $normalized = ($RelativePath -replace '[\\/]', [string]$sep)
+  $candidate = [System.IO.Path]::GetFullPath([System.IO.Path]::Combine([System.IO.Path]::GetFullPath($FrameRoot), $normalized))
+  $cmp = $(if($env:OS -eq "Windows_NT"){ [System.StringComparison]::OrdinalIgnoreCase } else { [System.StringComparison]::Ordinal })
+  if(-not $candidate.StartsWith($root,$cmp)){
+    throw $FailCode
+  }
+  return $candidate
+}
+
+$PSExe     = ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
 $VerifySig = Join-Path $PSScriptRoot "courier_verify_signature_v1.ps1"
 
 $config = Read-Json $ConfigPath
 if(-not $config){ Fail "COURIER_TRANSPORT_FAIL:INVALID_CONFIG" }
 
-$dropRoot     = Join-Path $RepoRoot ([string]$config.drop_root -replace '/','\')
-$acceptedRoot = Join-Path $RepoRoot ([string]$config.accepted_root -replace '/','\')
-$rejectedRoot = Join-Path $RepoRoot ([string]$config.rejected_root -replace '/','\')
+$dropRoot     = Join-Path $RepoRoot ([string]$config.drop_root)
+$acceptedRoot = Join-Path $RepoRoot ([string]$config.accepted_root)
+$rejectedRoot = Join-Path $RepoRoot ([string]$config.rejected_root)
 
 $nodeRoot    = Join-Path $RepoRoot "registry\nodes"
 $networkRoot = Join-Path $RepoRoot "registry\networks"
@@ -95,7 +109,14 @@ foreach($frameDir in $frames){
       throw "COURIER_TRANSPORT_FAIL:REPLAY_DETECTED"
     }
 
-    $expectedSender = "courier-local@covenant"
+    # Every ID in the (unsigned) frame header is used to build a registry path: constrain it first.
+    foreach($idField in @("frame_id","sender_node_id","recipient_node_id","network_id","session_id")){
+      if([string]$frame.$idField -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\z' -or ([string]$frame.$idField).Contains("..")){
+        throw ("COURIER_TRANSPORT_FAIL:BAD_ID:" + $idField)
+      }
+    }
+    if($frameDir.Name -cne $frameId){ throw "COURIER_TRANSPORT_FAIL:FRAME_DIR_ID_MISMATCH" }
+
     $senderNodeId = [string]$frame.sender_node_id
     $recipientNodeId = [string]$frame.recipient_node_id
     $networkId = [string]$frame.network_id
@@ -121,15 +142,17 @@ foreach($frameDir in $frames){
       throw "COURIER_TRANSPORT_FAIL:NODE_NOT_ALLOWED_ON_NETWORK"
     }
 
-    if([string]$frame.sender_identity -ne $expectedSender){
+    # The frame must be signed by the sender node's registered principal; nothing else is trusted.
+    $expectedSender = [string]$senderNode.principal
+    if([string]::IsNullOrWhiteSpace($expectedSender)){
+      throw "COURIER_TRANSPORT_FAIL:SENDER_PRINCIPAL_MISSING"
+    }
+    if([string]$frame.sender_identity -cne $expectedSender){
       throw "COURIER_TRANSPORT_FAIL:UNEXPECTED_SENDER_IDENTITY"
     }
-    if([string]$senderNode.principal -ne $expectedSender){
-      throw "COURIER_TRANSPORT_FAIL:SENDER_PRINCIPAL_MISMATCH"
-    }
 
-    $msgPath = Join-Path $frameDir.FullName ([string]$frame.message_rel -replace '/','\')
-    $sigPath = Join-Path $frameDir.FullName ([string]$frame.signature_rel -replace '/','\')
+    $msgPath = Resolve-FrameChildPath $frameDir.FullName ([string]$frame.message_rel) "COURIER_TRANSPORT_FAIL:MESSAGE_PATH_ESCAPE"
+    $sigPath = Resolve-FrameChildPath $frameDir.FullName ([string]$frame.signature_rel) "COURIER_TRANSPORT_FAIL:SIGNATURE_PATH_ESCAPE"
 
     if(-not (Test-Path -LiteralPath $msgPath)){ throw "COURIER_TRANSPORT_FAIL:MISSING_MESSAGE_ARTIFACT" }
     if(-not (Test-Path -LiteralPath $sigPath)){ throw "COURIER_TRANSPORT_FAIL:MISSING_SIGNATURE_ARTIFACT" }
@@ -139,8 +162,11 @@ foreach($frameDir in $frames){
       throw "COURIER_TRANSPORT_FAIL:PAYLOAD_HASH_MISMATCH"
     }
 
-    $verifyOut = Join-Path $env:TEMP ("courier_verify_out_" + $frameDir.Name + "_" + [guid]::NewGuid().ToString("N") + ".txt")
-    $verifyErr = Join-Path $env:TEMP ("courier_verify_err_" + $frameDir.Name + "_" + [guid]::NewGuid().ToString("N") + ".txt")
+    # Scratch output stays inside the repository (Constellation agent policy: no system temp folder).
+    $verifyTmp = Join-Path $RepoRoot "runtime\tmp"
+    Ensure-Dir $verifyTmp
+    $verifyOut = Join-Path $verifyTmp ("courier_verify_out_" + $frameDir.Name + "_" + [guid]::NewGuid().ToString("N") + ".txt")
+    $verifyErr = Join-Path $verifyTmp ("courier_verify_err_" + $frameDir.Name + "_" + [guid]::NewGuid().ToString("N") + ".txt")
     if(Test-Path -LiteralPath $verifyOut){ Remove-Item -LiteralPath $verifyOut -Force }
     if(Test-Path -LiteralPath $verifyErr){ Remove-Item -LiteralPath $verifyErr -Force }
 
@@ -162,9 +188,11 @@ foreach($frameDir in $frames){
       }
       throw ("COURIER_TRANSPORT_FAIL:VERIFY_FAILED:" + $errText.Trim())
     }
+    foreach($t in @($verifyOut,$verifyErr)){ if(Test-Path -LiteralPath $t){ Remove-Item -LiteralPath $t -Force } }
 
     $dest = Join-Path $acceptedRoot $frameDir.Name
-    if(Test-Path -LiteralPath $dest){ Remove-Item -LiteralPath $dest -Recurse -Force }
+    # Accepted evidence is never overwritten: an existing destination is a replay.
+    if(Test-Path -LiteralPath $dest){ throw "COURIER_TRANSPORT_FAIL:REPLAY_DETECTED" }
     if(-not (Test-Path -LiteralPath $frameDir.FullName -PathType Container)){
       continue
     }
@@ -198,7 +226,7 @@ foreach($frameDir in $frames){
   }
   catch {
     $dest = Join-Path $rejectedRoot $frameDir.Name
-    if(Test-Path -LiteralPath $dest){ Remove-Item -LiteralPath $dest -Recurse -Force }
+    if(Test-Path -LiteralPath $dest){ $dest = $dest + "-dup-" + [guid]::NewGuid().ToString("N").Substring(0,8) }
     if(-not (Test-Path -LiteralPath $frameDir.FullName -PathType Container)){
       continue
     }

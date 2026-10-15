@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "covenant_courier.product_policy.v1",
+  "title": "Covenant Courier product delivery policy v1",
+  "description": "Deterministic delivery policy evaluated by courier_deliver_v1.ps1 before any frame is sent. A message names a profile through covenant_courier.message.v1 policy_profile; an unknown profile is rejected (POLICY_PROFILE_UNKNOWN). Rule order is fixed: recipient node, session, payload size, payload encoding, restricted terms, Covenant Gate.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "default_profile", "profiles"],
+  "properties": {
+    "schema": { "const": "covenant_courier.product_policy.v1" },
+    "default_profile": { "type": "string", "minLength": 1 },
+    "profiles": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": { "$ref": "#/$defs/profile" }
+    }
+  },
+  "$defs": {
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allowed_recipient_nodes", "max_payload_bytes", "require_utf8_payload", "restricted_dictionary", "restricted_action", "notification_display_mode", "covenant_gate"],
+      "properties": {
+        "allowed_recipient_nodes": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
+        "max_payload_bytes": { "type": "integer", "minimum": 0, "maximum": 786432 },
+        "require_utf8_payload": { "type": "boolean" },
+        "restricted_dictionary": { "type": ["string", "null"], "description": "Repository-relative courier.lexical_dictionary.v1; entries with sensitivity 'controlled' are restricted terms." },
+        "restricted_action": { "enum": ["reject", "quarantine", "require_approval", "redact_notification"] },
+        "notification_display_mode": { "enum": ["minimal", "generic", "redacted", "full_safe"] },
+        "covenant_gate": { "enum": ["off", "advisory", "required"], "description": "off: not consulted. advisory: consulted when configured; a deny rejects, unavailable is recorded and local policy decides. required: an allow from Covenant Gate is needed; unavailable gives require_approval." },
+        "covenant_gate_signer": { "type": "string", "minLength": 1, "description": "Principal whose ssh signature (namespace covenant-gate/decision) must cover a supplied decision document. Required to accept decision documents." }
+      }
+    }
+  }
+}

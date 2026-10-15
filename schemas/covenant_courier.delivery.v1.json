@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "covenant_courier.delivery.v1",
+  "title": "Covenant Courier delivery envelope v1",
+  "description": "The signed artifact a product delivery frame carries: the product message, its policy decision and the payload. Written as canonical JSON (sorted keys, compact, LF). The transport signature (ssh-keygen -Y sign, namespace courier/message) covers these exact bytes. The receiver recomputes payload_sha256 and checks it against message.payload_sha256 and the sender's product receipt.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "message", "policy_decision", "notification", "payload_b64"],
+  "properties": {
+    "schema": { "const": "covenant_courier.delivery.v1" },
+    "message": { "$ref": "covenant_courier.message.v1" },
+    "policy_decision": { "$ref": "covenant_courier.policy_decision.v1" },
+    "notification": { "$ref": "covenant_courier.notification.v1" },
+    "payload_b64": { "type": "string", "contentEncoding": "base64" }
+  }
+}

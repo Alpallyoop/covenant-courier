@@ -42,7 +42,7 @@ $frame = [ordered]@{
   [Text.UTF8Encoding]::new($false)
 )
 
-$out = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $PolicyGate -RepoRoot $RepoRoot -FrameDir $FrameDir 2>&1
+$out = & ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $PolicyGate -RepoRoot $RepoRoot -FrameDir $FrameDir 2>&1
 $text = ($out | Out-String).Trim()
 $code = $LASTEXITCODE
 

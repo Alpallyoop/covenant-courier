@@ -5,7 +5,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$PSExe    = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe"
+$PSExe    = ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
 $RegNode  = Join-Path $PSScriptRoot "courier_register_node_v1.ps1"
 $RegNet   = Join-Path $PSScriptRoot "courier_register_network_v1.ps1"
 $OpenSes  = Join-Path $PSScriptRoot "courier_open_session_v1.ps1"
@@ -20,7 +20,7 @@ function Quote-Arg([string]$Value){
 function Run-Step{
   param(
     [Parameter(Mandatory=$true)][string]$Script,
-    [Parameter(Mandatory=$true)][string[]]$Args,
+    [Parameter(Mandatory=$true)][string[]]$ChildArgs,
     [Parameter(Mandatory=$true)][string]$FailCode
   )
 
@@ -32,7 +32,7 @@ function Run-Step{
   [void]$parts.Add("-File")
   [void]$parts.Add((Quote-Arg $Script))
 
-  foreach($arg in $Args){
+  foreach($arg in $ChildArgs){
     [void]$parts.Add((Quote-Arg $arg))
   }
 
@@ -54,7 +54,7 @@ if(Test-Path -LiteralPath $RegistryRoot){
   Remove-Item -LiteralPath $RegistryRoot -Recurse -Force
 }
 
-Run-Step -Script $RegNode -Args @(
+Run-Step -Script $RegNode -ChildArgs @(
   "-RepoRoot",$RepoRoot,
   "-NodeId","node-alpha",
   "-NodeName","Node Alpha",
@@ -62,7 +62,7 @@ Run-Step -Script $RegNode -Args @(
   "-Principal","courier-local@covenant"
 ) -FailCode "COURIER_REGISTRY_FAIL:REGISTER_NODE_ALPHA"
 
-Run-Step -Script $RegNode -Args @(
+Run-Step -Script $RegNode -ChildArgs @(
   "-RepoRoot",$RepoRoot,
   "-NodeId","node-beta",
   "-NodeName","Node Beta",
@@ -70,7 +70,7 @@ Run-Step -Script $RegNode -Args @(
   "-Principal","courier-local@covenant"
 ) -FailCode "COURIER_REGISTRY_FAIL:REGISTER_NODE_BETA"
 
-Run-Step -Script $RegNet -Args @(
+Run-Step -Script $RegNet -ChildArgs @(
   "-RepoRoot",$RepoRoot,
   "-NetworkId","courier-internal-net-v1",
   "-NetworkName","Courier Internal Net",
@@ -82,7 +82,7 @@ Run-Step -Script $RegNet -Args @(
   "-AllowedNodesCsv","node-alpha,node-beta"
 ) -FailCode "COURIER_REGISTRY_FAIL:REGISTER_NETWORK"
 
-Run-Step -Script $OpenSes -Args @(
+Run-Step -Script $OpenSes -ChildArgs @(
   "-RepoRoot",$RepoRoot,
   "-SessionId","session-alpha-beta-001",
   "-SenderNodeId","node-alpha",
@@ -91,7 +91,7 @@ Run-Step -Script $OpenSes -Args @(
   "-SessionRole","message-delivery"
 ) -FailCode "COURIER_REGISTRY_FAIL:OPEN_SESSION"
 
-Run-Step -Script $CloseSes -Args @(
+Run-Step -Script $CloseSes -ChildArgs @(
   "-RepoRoot",$RepoRoot,
   "-SessionId","session-alpha-beta-001"
 ) -FailCode "COURIER_REGISTRY_FAIL:CLOSE_SESSION"

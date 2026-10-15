@@ -35,13 +35,23 @@ function New-RandomBytes([int]$Count){
 }
 
 function Derive-KeyFromJoinCode([string]$JoinCode,[byte[]]$Salt){
-  $kdf = New-Object System.Security.Cryptography.Rfc2898DeriveBytes($JoinCode,$Salt,200000)
+  if([string]::IsNullOrWhiteSpace($JoinCode)){ throw "VTP_KDF_FAIL:MISSING_SECRET" }
+  if($null -eq $Salt -or $Salt.Length -lt 16){ throw "VTP_KDF_FAIL:SALT_TOO_SHORT" }
+  # Select SHA-256 explicitly. The three-argument constructor silently uses
+  # PBKDF2-HMAC-SHA1 on Windows PowerShell/.NET Framework.
+  $kdf = [System.Security.Cryptography.Rfc2898DeriveBytes]::new(
+    $JoinCode,
+    $Salt,
+    200000,
+    [System.Security.Cryptography.HashAlgorithmName]::SHA256
+  )
   try { return $kdf.GetBytes(64) } finally { $kdf.Dispose() }
 }
 
-function Protect-BytesAesGcm([byte[]]$Plain,[byte[]]$Key,[byte[]]$Nonce,[byte[]]$Aad){
-  # PS5.1/.NET Framework compatible fallback:
-  # AES-256-CBC + HMAC-SHA256, encrypt-then-MAC.
+function Protect-BytesAesCbcHmacSha256([byte[]]$Plain,[byte[]]$Key,[byte[]]$Iv,[byte[]]$Aad){
+  if($null -eq $Key -or $Key.Length -ne 64){ throw "VTP_CRYPTO_FAIL:KEY_MUST_BE_64_BYTES" }
+  if($null -eq $Iv -or $Iv.Length -ne 16){ throw "VTP_CRYPTO_FAIL:IV_MUST_BE_16_BYTES" }
+  if($null -eq $Aad){ $Aad = New-Object byte[] 0 }
   $encKey = New-Object byte[] 32
   $macKey = New-Object byte[] 32
   [Array]::Copy($Key,0,$encKey,0,32)
@@ -52,10 +62,7 @@ function Protect-BytesAesGcm([byte[]]$Plain,[byte[]]$Key,[byte[]]$Nonce,[byte[]]
   $aes.Padding = [System.Security.Cryptography.PaddingMode]::PKCS7
   $aes.KeySize = 256
   $aes.Key = $encKey
-  $ivMaterial = [System.Security.Cryptography.SHA256]::Create().ComputeHash($Nonce)
-$cbcIv = New-Object byte[] 16
-[Array]::Copy($ivMaterial,0,$cbcIv,0,16)
-$aes.IV = $cbcIv
+  $aes.IV = $Iv
 
   try {
     $encryptor = $aes.CreateEncryptor()
@@ -66,10 +73,10 @@ $aes.IV = $cbcIv
   }
   finally { $aes.Dispose() }
 
-  $macInput = New-Object byte[] ($Aad.Length + $Nonce.Length + $cipher.Length)
+  $macInput = New-Object byte[] ($Aad.Length + $Iv.Length + $cipher.Length)
   [Array]::Copy($Aad,0,$macInput,0,$Aad.Length)
-  [Array]::Copy($Nonce,0,$macInput,$Aad.Length,$Nonce.Length)
-  [Array]::Copy($cipher,0,$macInput,($Aad.Length+$Nonce.Length),$cipher.Length)
+  [Array]::Copy($Iv,0,$macInput,$Aad.Length,$Iv.Length)
+  [Array]::Copy($cipher,0,$macInput,($Aad.Length+$Iv.Length),$cipher.Length)
 
   $hmac = [System.Security.Cryptography.HMACSHA256]::new($macKey)
   try { $tag = $hmac.ComputeHash($macInput) } finally { $hmac.Dispose() }
@@ -77,16 +84,20 @@ $aes.IV = $cbcIv
   return @{ cipher=$cipher; tag=$tag }
 }
 
-function Unprotect-BytesAesGcm([byte[]]$Cipher,[byte[]]$Key,[byte[]]$Nonce,[byte[]]$Tag,[byte[]]$Aad){
+function Unprotect-BytesAesCbcHmacSha256([byte[]]$Cipher,[byte[]]$Key,[byte[]]$Iv,[byte[]]$Tag,[byte[]]$Aad){
+  if($null -eq $Key -or $Key.Length -ne 64){ throw "VTP_CRYPTO_FAIL:KEY_MUST_BE_64_BYTES" }
+  if($null -eq $Iv -or $Iv.Length -ne 16){ throw "VTP_CRYPTO_FAIL:IV_MUST_BE_16_BYTES" }
+  if($null -eq $Tag -or $Tag.Length -ne 32){ throw "AUTH_TAG_MISMATCH" }
+  if($null -eq $Aad){ $Aad = New-Object byte[] 0 }
   $encKey = New-Object byte[] 32
   $macKey = New-Object byte[] 32
   [Array]::Copy($Key,0,$encKey,0,32)
   [Array]::Copy($Key,32,$macKey,0,32)
 
-  $macInput = New-Object byte[] ($Aad.Length + $Nonce.Length + $Cipher.Length)
+  $macInput = New-Object byte[] ($Aad.Length + $Iv.Length + $Cipher.Length)
   [Array]::Copy($Aad,0,$macInput,0,$Aad.Length)
-  [Array]::Copy($Nonce,0,$macInput,$Aad.Length,$Nonce.Length)
-  [Array]::Copy($Cipher,0,$macInput,($Aad.Length+$Nonce.Length),$Cipher.Length)
+  [Array]::Copy($Iv,0,$macInput,$Aad.Length,$Iv.Length)
+  [Array]::Copy($Cipher,0,$macInput,($Aad.Length+$Iv.Length),$Cipher.Length)
 
   $hmac = [System.Security.Cryptography.HMACSHA256]::new($macKey)
   try { $actualTag = $hmac.ComputeHash($macInput) } finally { $hmac.Dispose() }
@@ -103,10 +114,7 @@ function Unprotect-BytesAesGcm([byte[]]$Cipher,[byte[]]$Key,[byte[]]$Nonce,[byte
   $aes.Padding = [System.Security.Cryptography.PaddingMode]::PKCS7
   $aes.KeySize = 256
   $aes.Key = $encKey
-  $ivMaterial = [System.Security.Cryptography.SHA256]::Create().ComputeHash($Nonce)
-$cbcIv = New-Object byte[] 16
-[Array]::Copy($ivMaterial,0,$cbcIv,0,16)
-$aes.IV = $cbcIv
+  $aes.IV = $Iv
 
   try {
     $decryptor = $aes.CreateDecryptor()
@@ -116,4 +124,13 @@ $aes.IV = $cbcIv
     finally { $decryptor.Dispose() }
   }
   finally { $aes.Dispose() }
+}
+
+# Compatibility wrappers for existing callers. These names are deprecated and
+# intentionally route to the accurately named construction above.
+function Protect-BytesAesGcm([byte[]]$Plain,[byte[]]$Key,[byte[]]$Nonce,[byte[]]$Aad){
+  return Protect-BytesAesCbcHmacSha256 $Plain $Key $Nonce $Aad
+}
+function Unprotect-BytesAesGcm([byte[]]$Cipher,[byte[]]$Key,[byte[]]$Nonce,[byte[]]$Tag,[byte[]]$Aad){
+  return Unprotect-BytesAesCbcHmacSha256 $Cipher $Key $Nonce $Tag $Aad
 }

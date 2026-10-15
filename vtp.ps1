@@ -12,7 +12,7 @@ $RepoRoot = (Resolve-Path $RepoRoot).Path
 $Scripts = Join-Path $RepoRoot "scripts"
 
 function Run-PS([string]$Script,[string[]]$ArgsList){
-  & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Script @ArgsList
+  & ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Script @ArgsList
   if($LASTEXITCODE -ne 0){
     throw ("VTP_CHILD_FAIL:" + $Script)
   }
@@ -50,7 +50,10 @@ if($Command -eq "smoke"){
     }
   }
 
-  $task = Get-ScheduledTask -TaskName "VTP Node Loop" -ErrorAction SilentlyContinue
+  $task = $null
+  if(Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue){
+    $task = Get-ScheduledTask -TaskName "VTP Node Loop" -ErrorAction SilentlyContinue
+  }
   if($null -eq $task){
     Write-Host "VTP_SMOKE_WARN:NO_SCHEDULED_TASK"
   } else {
@@ -91,9 +94,12 @@ if($Command -eq "status"){
   }
   Write-Host ("Receipts: " + $receipts)
 
-  $task = Get-ScheduledTask -TaskName "VTP Node Loop" -ErrorAction SilentlyContinue
+  $task = $null
+  if(Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue){
+    $task = Get-ScheduledTask -TaskName "VTP Node Loop" -ErrorAction SilentlyContinue
+  }
   if($null -eq $task){
-    Write-Host "Task: missing"
+    Write-Host "Task: missing (scheduled tasks are Windows-only)"
   } else {
     $info = Get-ScheduledTaskInfo -TaskName "VTP Node Loop"
     Write-Host ("Task state: " + $task.State)
@@ -115,7 +121,7 @@ if($Command -eq "run-node"){
   Write-Host "VTP_RUN_NODE_MODE: foreground-silent"
   Write-Host "VTP_RUN_NODE_STOP: Ctrl+C"
 
-  & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass `
+  & ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -ExecutionPolicy Bypass `
     -File (Join-Path $Scripts "vtp_node_loop_forever_v1.ps1") `
     -RepoRoot $RepoRoot `
     -NodeId $NodeId

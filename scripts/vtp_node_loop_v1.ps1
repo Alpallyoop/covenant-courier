@@ -52,9 +52,9 @@ if([string]::IsNullOrWhiteSpace($ConfigPath)){
   Ensure-Dir $rejected
 
   $cfg = [ordered]@{
-    drop_root = ($drop.Substring($RepoRoot.Length).TrimStart('\')).Replace('\','/')
-    accepted_root = ($accepted.Substring($RepoRoot.Length).TrimStart('\')).Replace('\','/')
-    rejected_root = ($rejected.Substring($RepoRoot.Length).TrimStart('\')).Replace('\','/')
+    drop_root = ($drop.Substring($RepoRoot.Length).TrimStart('\','/')).Replace('\','/')
+    accepted_root = ($accepted.Substring($RepoRoot.Length).TrimStart('\','/')).Replace('\','/')
+    rejected_root = ($rejected.Substring($RepoRoot.Length).TrimStart('\','/')).Replace('\','/')
   }
 
   Write-Utf8NoBomLf $ConfigPath (($cfg | ConvertTo-Json -Depth 10 -Compress))

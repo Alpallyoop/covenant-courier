@@ -45,7 +45,7 @@ function Get-Sha256Hex([string]$Path){
 }
 
 function Get-RelPath([string]$Root,[string]$Path){
-  return $Path.Substring($Root.Length).TrimStart('\').Replace('\','/')
+  return $Path.Substring($Root.Length).TrimStart('\','/').Replace('\','/')
 }
 
 function Run-Step([scriptblock]$Block,[string]$FailCode){

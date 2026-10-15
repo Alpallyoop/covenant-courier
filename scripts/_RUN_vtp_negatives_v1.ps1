@@ -5,7 +5,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$PSExe  = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe"
+$PSExe  = ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
 $Script = Join-Path $PSScriptRoot "_selftest_vtp_negatives_v1.ps1"
 
 $p = Start-Process -FilePath $PSExe -ArgumentList @(

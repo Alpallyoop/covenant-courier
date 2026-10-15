@@ -6,7 +6,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = (Resolve-Path $RepoRoot).Path
-$PSExe = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe"
+$PSExe = ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
 $Courier = Join-Path $RepoRoot "courier.ps1"
 $Vtp = Join-Path $RepoRoot "vtp.ps1"
 $VtpVerify = Join-Path $RepoRoot "vtp_verify_all.ps1"

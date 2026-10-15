@@ -16,7 +16,7 @@ if(Test-Path -LiteralPath $keyRoot){ Remove-Item -LiteralPath $keyRoot -Recurse 
 
 $keyPath = Join-Path $keyRoot "selftest_ed25519"
 $pubPath = $keyPath + ".pub"
-$ssh = Join-Path $env:WINDIR "System32\OpenSSH\ssh-keygen.exe"
+$ssh = $(if($env:WINDIR -and (Test-Path -LiteralPath (Join-Path $env:WINDIR "System32\OpenSSH\ssh-keygen.exe"))){ Join-Path $env:WINDIR "System32\OpenSSH\ssh-keygen.exe" } else { $c = Get-Command ssh-keygen -ErrorAction SilentlyContinue; if($null -eq $c){ throw "COURIER_FAIL:SSH_KEYGEN_NOT_FOUND" }; $c.Source })
 $p = Start-Process -FilePath $ssh `
   -ArgumentList ('-t ed25519 -N "" -f "{0}" -C "vtp-selftest@local"' -f $keyPath) `
   -NoNewWindow `

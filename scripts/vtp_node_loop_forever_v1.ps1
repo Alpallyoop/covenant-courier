@@ -21,7 +21,7 @@ while($true){
   $stdout = ""
   $stderr = ""
   try {
-    $out = & powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Vtp node-loop -RepoRoot $RepoRoot -NodeId $NodeId 2>&1
+    $out = & ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Vtp node-loop -RepoRoot $RepoRoot -NodeId $NodeId 2>&1
     $stdout = ($out | Out-String).Trim()
 
     if($LASTEXITCODE -ne 0){

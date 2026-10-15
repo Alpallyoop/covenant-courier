@@ -1,4 +1,20 @@
+# Local runtime state, proofs, keys and build output (never committed)
 registry/
 runtime/
 proofs/
 release/
+covenant-courier_release_smoke/
+src/Vtp2/bin/
+src/Vtp2/obj/
+*.tmp
+*.lock
+
+# Secrets
+.env
+.env.*
+*.key
+*.pem
+*.pfx
+*.p12
+*_ed25519
+*.state

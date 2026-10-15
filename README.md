@@ -22,212 +22,168 @@ The current product core is local-first and CLI-driven. Runtime/proof state is i
 
 ## Current status
 
-Current checkpoint:
-
-    covenant-courier-receipt-chain-v1-green
-
-Current product core:
-
-    schema-test          GREEN
-    prepare              GREEN
-    send                 GREEN
-    receive              GREEN
-    receive-negative     GREEN
-    receipts             GREEN
-    receipt-chain        GREEN
-    verify               GREEN
-    VTP substrate         GREEN
+Product core: governed delivery, verified receive, append-only receipt chain, Constellation
+integration receipts, Covenant Gate adapter, NeverLost trust import. VTP v1 substrate and the VTP v2
+secure core are green. Facts and limits: `docs/canonical/CURRENT_STATE.md`.
 
 Primary product proof:
 
-    .\courier.ps1 verify
+    .\courier.ps1 verify          ->  COVENANT_COURIER_VERIFY_OK
+    .\courier.ps1 verify-all      ->  COVENANT_COURIER_VERIFY_ALL_OK, COVENANT_COURIER_VERIFY_OK
 
-Expected:
-
-    COVENANT_COURIER_VERIFY_OK
-
-Protocol substrate proof:
-
-    .\vtp.ps1 verify
-
-Expected:
-
-    VTP_VERIFY_ALL_OK
+`verify` = schema test, prepare, send, receive (positive and negative), receipts, receipt chain and the
+VTP substrate (`.\vtp.ps1 verify` -> `VTP_VERIFY_ALL_OK`). `verify-all` adds the governed-delivery
+self-test (29 cases; 30 with a Covenant Gate checkout), the integration-receipt self-test (14), the NeverLost trust-import self-test (7),
+a verification of every integration receipt on disk, and the VTP v2 self-test (`.\vtp2.ps1 verify`,
+needs the .NET 10 SDK).
 
 ## Command map
 
 ### Product CLI
 
-Show help:
-
     .\courier.ps1 help
-
-Verify schemas:
-
     .\courier.ps1 schema-test
-
-Prepare a product message:
-
-    .\courier.ps1 prepare
-
-Send a product message through VTP:
-
-    .\courier.ps1 send
-
-Receive and accept the latest sent product frame:
-
+    .\courier.ps1 prepare  [-PayloadText ..] [-PolicyProfile default|public|confidential]
+    .\courier.ps1 send     [-PayloadText ..] [-PolicyProfile ..]      prepare + deliver (demo nodes)
+    .\courier.ps1 deliver  -MessagePath <message.json> -PayloadPath <file> [-OutDir <dir>]
+                           [-CovenantGateRoot <dir> | -CovenantGateDecisionPath <eval_output.json>]
     .\courier.ps1 receive
-
-Run the product receive negative test:
-
     .\courier.ps1 receive-negative
-
-Inspect product receipts:
-
     .\courier.ps1 receipts
-
-Build and verify the product receipt chain:
-
     .\courier.ps1 receipt-chain
-
-Run the full product proof:
-
+    .\courier.ps1 trust-import -TrustBundlePath <file> -ExpectedSha256 <sha> [-NeverLostRoot <dir>]
+    .\courier.ps1 integration-receipts [-Action verify|list|nfl-inboxes]
     .\courier.ps1 verify
+    .\courier.ps1 verify-all
+
+`deliver` exit codes: 0 sent, 42 refused by policy (rejected or quarantined), anything else failed.
+The full caller contract is in `docs/integrations/README.md`.
 
 ### VTP protocol CLI
 
-Run VTP verification:
-
-    .\vtp.ps1 verify
-
-Run local transmit:
-
-    .\vtp.ps1 transmit -To node-beta
-
-Run UDP wire smoke:
-
-    .\vtp.ps1 wire-smoke
-
-Run DLP test:
-
-    .\vtp.ps1 dlp-test
-
-Inspect VTP receipts:
-
-    .\vtp.ps1 receipts
+    .\vtp.ps1 verify | transmit -To node-beta | wire-smoke | wire-ingest | wire-negative | dlp-test | receipts
+    .\vtp2.ps1 verify | build | init | bundle | rotate | trust | session-init | session-accept | encrypt | decrypt | status | kat
+    .\courier-secure.ps1 init|bundle|trust|connect|accept|send|receive|inspect|verify     (VTP v2 wrapper)
 
 ## Product flow
 
-The current product flow is:
-
-    prepare product message
-    send through VTP
-    receive through VTP node policy loop
-    accept or reject
-    emit product receipt
-    chain product receipts
-    verify product + VTP substrate
-
-Product receipts link:
-
-    message_id
-    frame_id
-    payload_sha256
-    event_type
-    decision
-    reason_code
+    prepare covenant_courier.message.v1 + payload
+    deliver:
+      validate message, recompute payload hash
+      delivery policy for the message's profile (recipient, session, size, encoding, restricted terms)
+      optional Covenant Gate decision (off | advisory | required per profile)
+      write covenant_courier.policy_decision.v1 and covenant_courier.notification.v1
+      allowed  -> sign covenant_courier.delivery.v1 (message + decision + notification + payload)
+                  and send it as a VTP frame to the recipient node
+      refused  -> reject, or quarantine under runtime/product_messages/quarantine/
+      product receipt for every outcome, appended and chained
+    receive:
+      recipient node policy loop, listener signature + frame hash check
+      envelope bound to the sender's receipt (message ID, payload hash, node, session, decision)
+      release to runtime/product_messages/inbox/<node>/<message_id>/, accepted or rejected receipt
 
 ## Receipts
 
-Product receipts are written to:
+    proofs\receipts\covenant_courier_product.ndjson         product receipts (covenant_courier.product_receipt.v1)
+    proofs\receipts\covenant_courier_product.chain.ndjson   append-only chain (covenant_courier.product_receipt_chain.v1)
+    proofs\receipts\courier_transport.ndjson                transport receipts
+    proofs\receipts\vtp_udp_wire_ingest.ndjson              UDP wire ingest receipts
+    proofs\integration_receipts\<consumer>__<provider>\receipts.ndjson
+                                                            constellation.integration.receipt.v1 (Courier as emitter)
 
-    proofs\receipts\covenant_courier_product.ndjson
-
-Product receipt chain is written to:
-
-    proofs\receipts\covenant_courier_product.chain.ndjson
-
-Transport receipts are written to:
-
-    proofs\receipts\courier_transport.ndjson
-
-UDP wire ingest receipts are written to:
-
-    proofs\receipts\vtp_udp_wire_ingest.ndjson
+`product_receipt.json` written by `deliver` holds exactly the receipt line, so its SHA-256 equals the
+chain's `receipt_sha256`. The chain re-verifies every existing entry before appending; an edited,
+removed or reordered receipt fails with `COVENANT_COURIER_RECEIPT_CHAIN_FAIL:TAMPER_DETECTED`.
 
 The proofs directory is intentionally ignored by git.
 
 ## Schemas
 
-Product schemas live in:
-
     schemas\covenant_courier.message.v1.json
     schemas\covenant_courier.notification.v1.json
     schemas\covenant_courier.policy_decision.v1.json
     schemas\covenant_courier.product_receipt.v1.json
+    schemas\covenant_courier.delivery.v1.json
+    schemas\covenant_courier.product_policy.v1.json
+    schemas\covenant_courier.product_receipt_chain.v1.json
 
-Schema test:
+Delivery policy: `policy\courier_product_policy_v1.json`. Schema test: `.\courier.ps1 schema-test`.
 
-    .\courier.ps1 schema-test
+## Constellation and integrations
+
+Covenant Courier is the `covenant-courier` service (family `covenant`, layer
+`workflow.governed-messaging`) in the Constellation ecosystem. It works with no other service present.
+
+| Edge | Courier's side |
+|---|---|
+| Rebound -> Courier (registered) | `courier.ps1 deliver` contract; Rebound carries SHA-256 of `product_receipt.json` |
+| Courier -> Covenant Gate (proposed) | invoke Covenant Gate's sealed evaluator or verify a signed decision; integration receipt per consultation |
+| Courier -> NeverLost (proposed) | `trust-import` of a pinned trust bundle; integration receipt per import |
+| NFL (witness) | reads `proofs/integration_receipts/*` as receipt-mode inboxes |
+| Global Workbench (proposed) | draft plugin manifest |
+
+Details: `docs/integrations/README.md`. Proposed registry changes and what Courier needs from each
+service: `docs/proposals/0001-covenant-courier-ownership-and-integrations.md`.
 
 ## Docs
 
-Product spec:
-
+    docs\canonical\CURRENT_STATE.md          what runs today, known limits
+    docs\integrations\README.md              delivery contract, Covenant Gate, NeverLost, NFL
+    docs\proposals\0001-...md                 ownership and integration proposal for Constellation
     docs\COVENANT_COURIER_PRODUCT_SPEC_V1.md
-
-Threat model:
-
     docs\COVENANT_COURIER_THREAT_MODEL_V1.md
-
-Release checklist:
-
     docs\COVENANT_COURIER_RELEASE_CHECKLIST_V1.md
-
-Wire trace model:
-
-    docs\VTP_WIRE_TRACE_MODEL.md
-
-Wire key and receipts:
-
-    docs\VTP_WIRE_KEY_AND_RECEIPTS.md
-
-Roadmap:
-
+    spec\VTP_V2_SECURITY_PROTOCOL.md
+    docs\VTP_WIRE_TRACE_MODEL.md, docs\VTP_WIRE_KEY_AND_RECEIPTS.md
     docs\ROADMAP.md
 
 ## Runtime and git hygiene
 
-Expected ignored runtime state:
+Ignored local state: `proofs/`, `registry/`, `runtime/`, `release/`, `covenant-courier_release_smoke/`,
+and VTP v2 build output (`src/Vtp2/bin`, `src/Vtp2/obj`). These hold proof outputs, sessions, keys,
+receipts, frames and build output and must not be committed.
 
-    !! proofs/
-    !! registry/
-    !! runtime/
+## Working remotely
 
-These directories contain local proof outputs, sessions, receipts, runtime frames, and generated state.
+Prerequisites (Linux cloud session): PowerShell 7 (`pwsh`), OpenSSH `ssh-keygen`, and the .NET 10 SDK
+for VTP v2. On Windows the same commands run under Windows PowerShell 5.1 (`ssh-keygen` from
+`C:\Windows\System32\OpenSSH`, used automatically when present).
 
-They should not be committed.
+Commands run in a Linux session on 2026-10-15, all green:
+
+    pwsh -File courier.ps1 verify -RepoRoot .        # product + VTP substrate
+    pwsh -File courier.ps1 verify-all -RepoRoot .    # + delivery, integration receipts, trust import, VTP v2
+    pwsh -File scripts/_smoke_covenant_courier_release_fast_v1.ps1 -RepoRoot .
+    pwsh -File scripts/_RUN_vtp_conformance_v1.ps1 -RepoRoot .   (and the other scripts/_RUN_*.ps1)
+    pwsh -File scripts/FULL_GREEN_RUNNER_COURIER_STANDALONE_v1.ps1 -RepoRoot .
+
+Off Windows, VTP v2 state is sealed under a key file: create 32 random bytes with mode 0600 and set
+`VTP2_STATE_KEY_FILE` to its path (the self-test does this itself). Windows-only: DPAPI state
+protection for VTP v2 and the scheduled-task node loop (`vtp.ps1 install-node`). Nothing else needs the
+home computer.
 
 ## Current limitations
 
 This is a local CLI product-core checkpoint, not a polished public app release.
+It is also not a production end-to-end encrypted messenger. The current key exchange,
+endpoint storage, and transport adapters are development prototypes and are unsuitable
+for defense or classified deployment.
 
 Known remaining work:
 
+    product delivery over VTP v2 sessions (today: signed, hash-bound frames without payload encryption)
+    in-session DH ratchet for VTP v2
     fixed binary wire header
-    product receive rejection cases
-    product receipt schema hardening
-    production key/session model
-    replay protection
+    signers issued by NeverLost instead of local bootstrap keys
     service mode only if explicit
-    UI/workbench
-    public release package
+    UI through Global Workbench
+    public release package for the current product core (v0.1.5 predates governed delivery)
 
 ## Release posture
 
 Current state:
 
-    product-core green checkpoint
+    product-core green checkpoint, developer preview
 
 Not yet:
 

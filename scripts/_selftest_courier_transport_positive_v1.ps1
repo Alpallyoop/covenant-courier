@@ -5,7 +5,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$PSExe = Join-Path $env:WINDIR "System32\WindowsPowerShell\v1.0\powershell.exe"
+$PSExe = ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
 
 $Cli       = Join-Path $RepoRoot "scripts\courier_cli_v1.ps1"
 $Send       = Join-Path $RepoRoot "scripts\courier_transport_send_v1.ps1"
@@ -37,9 +37,20 @@ foreach($p in @($WorkRoot,$DropRoot,$Accepted,$Rejected)){
   -WorkRoot $WorkRoot
 if($LASTEXITCODE -ne 0){ throw ("COURIER_TRANSPORT_POS_FAIL:PIPELINE_EXIT_" + $LASTEXITCODE) }
 
+# Registry preconditions: nodes, network and an open session for this test's frames.
+& $PSExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "scripts\_selftest_courier_registry_v1.ps1") -RepoRoot $RepoRoot | Out-Null
+if($LASTEXITCODE -ne 0){ throw ("COURIER_TRANSPORT_POS_FAIL:REGISTRY_EXIT_" + $LASTEXITCODE) }
+& $PSExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "scripts\courier_open_session_v1.ps1") -RepoRoot $RepoRoot -SessionId "session-transport-selftest-001" -SenderNodeId "node-alpha" -RecipientNodeId "node-beta" -NetworkId "courier-internal-net-v1" -SessionRole "message-delivery" | Out-Null
+if($LASTEXITCODE -ne 0){ throw ("COURIER_TRANSPORT_POS_FAIL:OPEN_SESSION_EXIT_" + $LASTEXITCODE) }
+
 & $PSExe -NoProfile -NonInteractive -ExecutionPolicy Bypass `
   -File $Send `
   -RepoRoot $RepoRoot `
+  -SenderNodeId "node-alpha" `
+  -RecipientNodeId "node-beta" `
+  -NetworkId "courier-internal-net-v1" `
+  -SessionId "session-transport-selftest-001" `
+  -SenderRole "message-delivery" `
   -MessagePath $TokOut `
   -DropRoot $DropRoot `
   -SenderIdentity "courier-local@covenant" `

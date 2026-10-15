@@ -74,9 +74,9 @@ Reset-Dir $BetaAccepted
 Reset-Dir $BetaRejected
 
 $cfg = [ordered]@{
-  drop_root     = ($BetaInboxDrop.Substring($RepoRoot.Length).TrimStart('\')).Replace('\','/')
-  accepted_root = ($BetaAccepted.Substring($RepoRoot.Length).TrimStart('\')).Replace('\','/')
-  rejected_root = ($BetaRejected.Substring($RepoRoot.Length).TrimStart('\')).Replace('\','/')
+  drop_root     = ($BetaInboxDrop.Substring($RepoRoot.Length).TrimStart('\','/')).Replace('\','/')
+  accepted_root = ($BetaAccepted.Substring($RepoRoot.Length).TrimStart('\','/')).Replace('\','/')
+  rejected_root = ($BetaRejected.Substring($RepoRoot.Length).TrimStart('\','/')).Replace('\','/')
 }
 Write-Utf8NoBomLf $BetaConfig (($cfg | ConvertTo-Json -Depth 10 -Compress))
 

@@ -77,12 +77,13 @@ function Prepare-Base([string]$CaseRoot){
   Reset-Dir $Accepted
   Reset-Dir $Rejected
 
-  $cfg = [ordered]@{
-    drop_root = ($Drop.Substring($RepoRoot.Length).TrimStart('\')).Replace('\','/')
-    accepted_root = ($Accepted.Substring($RepoRoot.Length).TrimStart('\')).Replace('\','/')
-    rejected_root = ($Rejected.Substring($RepoRoot.Length).TrimStart('\')).Replace('\','/')
+  # Distinct name: PowerShell variables are case-insensitive, so $cfg would overwrite the $Cfg path.
+  $cfgObj = [ordered]@{
+    drop_root = ($Drop.Substring($RepoRoot.Length).TrimStart('\','/')).Replace('\','/')
+    accepted_root = ($Accepted.Substring($RepoRoot.Length).TrimStart('\','/')).Replace('\','/')
+    rejected_root = ($Rejected.Substring($RepoRoot.Length).TrimStart('\','/')).Replace('\','/')
   }
-  Write-Utf8NoBomLf $Cfg (($cfg | ConvertTo-Json -Depth 10 -Compress))
+  Write-Utf8NoBomLf $Cfg (($cfgObj | ConvertTo-Json -Depth 10 -Compress))
   return [ordered]@{
     Drop = $Drop
     Accepted = $Accepted
