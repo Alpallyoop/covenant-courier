@@ -18,7 +18,7 @@ function Run-Vtp {
   param([string[]]$ChildArgs)
 
   $ps = ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
-  $out = & $ps -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Vtp @ChildArgs 2>&1
+  $eapPrev = $ErrorActionPreference; $ErrorActionPreference = "Continue"; $out = & $ps -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Vtp @ChildArgs 2>&1; $ErrorActionPreference = $eapPrev
   $code = $LASTEXITCODE
   $text = ($out | Out-String)
 

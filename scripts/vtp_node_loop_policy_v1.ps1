@@ -48,7 +48,7 @@ foreach($frame in $frames){
     throw
   }
 
-  $out = & ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $PolicyGate -RepoRoot $RepoRoot -FrameDir $claimPath 2>&1
+  $eapPrev = $ErrorActionPreference; $ErrorActionPreference = "Continue"; $out = & ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $PolicyGate -RepoRoot $RepoRoot -FrameDir $claimPath 2>&1; $ErrorActionPreference = $eapPrev
   $text = ($out | Out-String).Trim()
   $code = $LASTEXITCODE
 

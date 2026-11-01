@@ -173,7 +173,7 @@ $frame.payload_sha256 = $plainHash
 & ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $ReplayGuard -RepoRoot $RepoRoot -FrameDir $FrameDir | Out-Null
 if($LASTEXITCODE -ne 0){ throw "VTP_UDP_WIRE_INGEST_FAIL:REPLAY_GUARD_FAILED" }
 
-$policyOut = & ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $PolicyGate -RepoRoot $RepoRoot -FrameDir $FrameDir 2>&1
+$eapPrev = $ErrorActionPreference; $ErrorActionPreference = "Continue"; $policyOut = & ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $PolicyGate -RepoRoot $RepoRoot -FrameDir $FrameDir 2>&1; $ErrorActionPreference = $eapPrev
 $policyText = ($policyOut | Out-String).Trim()
 $policyCode = $LASTEXITCODE
 

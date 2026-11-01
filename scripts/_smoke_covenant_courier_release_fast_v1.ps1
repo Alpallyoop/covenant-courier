@@ -51,7 +51,7 @@ function Run-Courier([string]$Command){
 
   Push-Location $RepoRoot
   try {
-    $out = & $PSExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Courier $Command 2>&1
+    $eapPrev = $ErrorActionPreference; $ErrorActionPreference = "Continue"; $out = & $PSExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Courier $Command 2>&1; $ErrorActionPreference = $eapPrev
     $exitCode = $LASTEXITCODE
   } finally {
     Pop-Location

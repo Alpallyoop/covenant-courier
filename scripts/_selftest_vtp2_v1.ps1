@@ -26,7 +26,7 @@ if($LASTEXITCODE -ne 0){ throw "VTP2_SELFTEST_FAIL:BUILD" }
 function Run([string[]]$A){ & dotnet $Dll @A | Out-Host; if($LASTEXITCODE -ne 0){throw ("VTP2_SELFTEST_FAIL:COMMAND:" + ($A -join ' '))} }
 function Expect-Fail([string]$Token,[string[]]$A){
   $prior=$ErrorActionPreference;$ErrorActionPreference="Continue"
-  $text=(& dotnet $Dll @A 2>&1 | Out-String); $code=$LASTEXITCODE
+  $eapPrev=$ErrorActionPreference;$ErrorActionPreference="Continue";$text=(& dotnet $Dll @A 2>&1 | Out-String); $code=$LASTEXITCODE;$ErrorActionPreference=$eapPrev
   $ErrorActionPreference=$prior
   if($code -eq 0){throw ("VTP2_SELFTEST_FAIL:EXPECTED_FAILURE:"+$Token)}
   if(-not $text.Contains($Token)){throw ("VTP2_SELFTEST_FAIL:WRONG_FAILURE:EXPECTED="+$Token+":ACTUAL="+$text)}

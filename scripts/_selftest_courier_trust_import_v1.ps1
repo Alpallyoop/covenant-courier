@@ -89,7 +89,7 @@ $Cases++; Write-Host "COURIER_TRUST_IMPORT_CASE_OK: pinned-import -> allowed_sig
 # A signature by the imported key verifies through the imported trust root, for that principal only.
 $doc = Join-Path $Run "signed.json"
 [IO.File]::WriteAllText($doc,'{"hello":"courier"}')
-& $keygen -Y sign -f $key -n "courier/message" $doc 2>&1 | Out-Null
+$eapPrev = $ErrorActionPreference; $ErrorActionPreference = "Continue"; & $keygen -Y sign -f $key -n "courier/message" $doc 2>&1 | Out-Null; $ErrorActionPreference = $eapPrev
 Must (Test-Path -LiteralPath ($doc + ".sig")) "SIGN"
 $r = Child $Verify @("-RepoRoot",$Sandbox,"-MessagePath",$doc,"-SignerIdentity",$principal,"-Namespace","courier/message")
 Must ($r.Code -eq 0 -and $r.Text -match "COURIER_SIGNATURE_VERIFY_OK") ("VERIFY_IMPORTED:" + $r.Text)
