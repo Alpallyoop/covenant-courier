@@ -25,8 +25,9 @@ if($LASTEXITCODE -ne 0){ throw "VTP2_SELFTEST_FAIL:BUILD" }
 
 function Run([string[]]$A){ & dotnet $Dll @A | Out-Host; if($LASTEXITCODE -ne 0){throw ("VTP2_SELFTEST_FAIL:COMMAND:" + ($A -join ' '))} }
 function Expect-Fail([string]$Token,[string[]]$A){
+  # Continue: Windows PowerShell 5.1 turns the tool's stderr token into a terminating error under Stop.
   $prior=$ErrorActionPreference;$ErrorActionPreference="Continue"
-  $eapPrev=$ErrorActionPreference;$ErrorActionPreference="Continue";$text=(& dotnet $Dll @A 2>&1 | Out-String); $code=$LASTEXITCODE;$ErrorActionPreference=$eapPrev
+  $text=(& dotnet $Dll @A 2>&1 | Out-String); $code=$LASTEXITCODE
   $ErrorActionPreference=$prior
   if($code -eq 0){throw ("VTP2_SELFTEST_FAIL:EXPECTED_FAILURE:"+$Token)}
   if(-not $text.Contains($Token)){throw ("VTP2_SELFTEST_FAIL:WRONG_FAILURE:EXPECTED="+$Token+":ACTUAL="+$text)}
@@ -64,6 +65,62 @@ Expect-Fail "VTP2_REPLAY_DETECTED" @("decrypt","--state",$Bob,"--in",$messages[0
 $reply=Join-Path $Root "reply.txt";[IO.File]::WriteAllText($reply,"responder-secret",[Text.UTF8Encoding]::new($false));$replyMsg=Join-Path $Root "reply.json"
 Run @("encrypt","--state",$Bob,"--session",$Session,"--in",$reply,"--out",$replyMsg);Run @("decrypt","--state",$Alice,"--in",$replyMsg,"--out",(Join-Path $Root "reply.out"))
 if((Get-Content -LiteralPath (Join-Path $Root "reply.out") -Raw)-ne"responder-secret"){throw "VTP2_SELFTEST_FAIL:BIDIRECTIONAL"}
+
+# ---- in-session DH ratchet ----
+function RatchetKey([string]$Msg){ return [string](Get-Content -LiteralPath $Msg -Raw|ConvertFrom-Json).ratchet_public_b64 }
+function Out([string[]]$A){ $o=(& dotnet $Dll @A | Out-String); if($LASTEXITCODE -ne 0){throw ("VTP2_SELFTEST_FAIL:COMMAND:" + ($A -join ' '))}; Write-Host $o.Trim(); return $o }
+function Enc([string]$State,[string]$Text,[string]$Name){ $pp=Join-Path $Root ($Name+".txt"); $mm=Join-Path $Root ($Name+".json"); [IO.File]::WriteAllText($pp,$Text,[Text.UTF8Encoding]::new($false)); [void](Out @("encrypt","--state",$State,"--session",$Session,"--in",$pp,"--out",$mm)); return $mm }
+function Dec([string]$State,[string]$Msg,[string]$Want){ $oo=$Msg+".out"; $t=Out @("decrypt","--state",$State,"--in",$Msg,"--out",$oo); if((Get-Content -LiteralPath $oo -Raw) -ne $Want){throw ("VTP2_SELFTEST_FAIL:RATCHET_ROUNDTRIP:"+$Msg)}; return $t }
+# All three first messages share Alice's first ratchet key; Bob's reply carries a key Bob made after
+# receiving them (not his signed prekey), and Alice's next message carries a new key of hers.
+$k0=RatchetKey $messages[0]; if((RatchetKey $messages[1]) -ne $k0 -or (RatchetKey $messages[2]) -ne $k0){throw "VTP2_SELFTEST_FAIL:RATCHET_KEY_CHANGED_WITHIN_CHAIN"}
+$bobSpk=[string](Get-Content -LiteralPath $BB -Raw|ConvertFrom-Json).signed_prekey_public_b64
+if((RatchetKey $replyMsg) -eq $bobSpk -or (RatchetKey $replyMsg) -eq $k0){throw "VTP2_SELFTEST_FAIL:RESPONDER_DID_NOT_RATCHET"}
+$a1=Enc $Alice "after-first-ratchet" "r-a1"; if((RatchetKey $a1) -eq $k0){throw "VTP2_SELFTEST_FAIL:INITIATOR_DID_NOT_RATCHET"}
+$t=Dec $Bob $a1 "after-first-ratchet"; if($t -notmatch 'VTP2_RATCHET_STEP:'){throw "VTP2_SELFTEST_FAIL:NO_RATCHET_STEP_REPORTED"}
+Write-Host "VTP2_RATCHET_OK:KEYS_ROTATE_PER_ROUND_TRIP"
+# Out of order within one chain and across a ratchet step: Bob sends w (Alice reads it and ratchets) and
+# y1, then (after Alice's a2 makes him ratchet) y2 and y3; Alice receives y2 first (keeps y1's key from the announced previous chain length).
+$w=Enc $Bob "w" "r-w"; [void](Dec $Alice $w "w")
+$y1=Enc $Bob "y1-old-chain" "r-y1"
+$a2=Enc $Alice "a2" "r-a2"; [void](Dec $Bob $a2 "a2")
+$y2=Enc $Bob "y2-new-chain" "r-y2"; $y3=Enc $Bob "y3-new-chain" "r-y3"
+if((RatchetKey $y1) -eq (RatchetKey $y2)){throw "VTP2_SELFTEST_FAIL:NO_RATCHET_BETWEEN_CHAINS"}
+[void](Dec $Alice $y3 "y3-new-chain"); [void](Dec $Alice $y1 "y1-old-chain"); [void](Dec $Alice $y2 "y2-new-chain")
+Expect-Fail "VTP2_REPLAY_DETECTED" @("decrypt","--state",$Alice,"--in",$y1,"--out",(Join-Path $Root "y1.replay"))
+Write-Host "VTP2_RATCHET_OK:OUT_OF_ORDER_ACROSS_STEPS"
+# Post-compromise recovery: a copy of Alice's state taken now decrypts Bob's next message (same chain),
+# but not what Bob sends once Alice has used a ratchet key made after the theft.
+$stolen=Join-Path $Root "alice.stolen.state"; [IO.File]::Copy($Alice,$stolen,$true)
+$z1=Enc $Bob "z1-before-recovery" "r-z1"
+$stolenCopy=Join-Path $Root "alice.stolen2.state"; [IO.File]::Copy($stolen,$stolenCopy,$true)
+[void](Dec $stolenCopy $z1 "z1-before-recovery")
+[void](Dec $Alice $z1 "z1-before-recovery")
+$a3=Enc $Alice "a3" "r-a3"; [void](Dec $Bob $a3 "a3")
+$z2=Enc $Bob "z2-after-recovery" "r-z2"
+[void](Dec $Alice $z2 "z2-after-recovery")
+# z2 is still readable with the stolen copy (Alice's key kA3 predates the theft); one more round trip
+# brings a key of Alice's made after the theft, and from then on the copy is useless.
+$a4r=Enc $Alice "a4r" "r-a4r"; [void](Dec $Bob $a4r "a4r")
+$z3=Enc $Bob "z3-after-recovery" "r-z3"
+[void](Dec $Alice $z3 "z3-after-recovery")
+Expect-Fail "VTP2_CRYPTOGRAPHIC_FAILURE" @("decrypt","--state",$stolen,"--in",$z3,"--out",(Join-Path $Root "z3.stolen.out"))
+Write-Host "VTP2_RATCHET_OK:POST_COMPROMISE_RECOVERY"
+# A forged ratchet key is authenticated (header is AEAD data) and leaves the state untouched.
+$a4=Enc $Alice "a4" "r-a4"; $forged=Join-Path $Root "r-forged.json"
+Mutate $a4 $forged {param($o)$o.ratchet_public_b64=$bobSpk}
+Expect-Fail "VTP2_CRYPTOGRAPHIC_FAILURE" @("decrypt","--state",$Bob,"--in",$forged,"--out",(Join-Path $Root "forged.out"))
+[void](Dec $Bob $a4 "a4")
+Write-Host "VTP2_RATCHET_OK:FORGED_RATCHET_KEY_REFUSED"
+# The responder may send first, before it has received anything (initial r2i chain under its signed prekey).
+$Init2=Join-Path $Root "session-init-2.json"; [void](Out @("session-init","--state",$Alice,"--peer-bundle",$BB,"--out",$Init2))
+$S2=[string](Get-Content -LiteralPath $Init2 -Raw|ConvertFrom-Json).session_id; [void](Out @("session-accept","--state",$Bob,"--request",$Init2))
+$bp=Join-Path $Root "r-b-first.txt"; [IO.File]::WriteAllText($bp,"responder-first",[Text.UTF8Encoding]::new($false)); $bm=Join-Path $Root "r-b-first.json"
+[void](Out @("encrypt","--state",$Bob,"--session",$S2,"--in",$bp,"--out",$bm)); if((RatchetKey $bm) -ne $bobSpk){throw "VTP2_SELFTEST_FAIL:RESPONDER_FIRST_KEY"}
+$ap=Join-Path $Root "r-a-first.txt"; [IO.File]::WriteAllText($ap,"initiator-first",[Text.UTF8Encoding]::new($false)); $am=Join-Path $Root "r-a-first.json"
+[void](Out @("encrypt","--state",$Alice,"--session",$S2,"--in",$ap,"--out",$am))
+[void](Dec $Alice $bm "responder-first"); [void](Dec $Bob $am "initiator-first")
+Write-Host "VTP2_RATCHET_OK:RESPONDER_SENDS_FIRST_AND_CONCURRENT"
 
 $freshPlain=Join-Path $Root "fresh.txt";[IO.File]::WriteAllText($freshPlain,"fresh-secret-for-tamper",[Text.UTF8Encoding]::new($false));$freshMsg=Join-Path $Root "fresh.json"
 Run @("encrypt","--state",$Alice,"--session",$Session,"--in",$freshPlain,"--out",$freshMsg)

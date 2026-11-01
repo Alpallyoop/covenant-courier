@@ -55,7 +55,7 @@ static class Protocol
     public static readonly string[] BundleFields = ["schema","suite","device_id","sequence","expires_utc","identity_sign_public_b64","identity_dh_public_b64","signed_prekey_public_b64","one_time_prekeys","signature_b64"];
     public static readonly string[] OpkFields = ["id","public_b64"];
     public static readonly string[] SessionInitFields = ["schema","suite","session_id","created_utc","initiator_bundle","recipient_device_id","recipient_fingerprint","recipient_bundle_sequence","ephemeral_public_b64","one_time_prekey_id","signature_b64"];
-    public static readonly string[] MessageFields = ["schema","suite","session_id","sender_device_id","recipient_device_id","message_id","message_number","created_utc","expires_utc","content_type","nonce_b64","ciphertext_length","ciphertext_b64","tag_b64"];
+    public static readonly string[] MessageFields = ["schema","suite","session_id","sender_device_id","recipient_device_id","message_id","ratchet_public_b64","previous_chain_length","message_number","created_utc","expires_utc","content_type","nonce_b64","ciphertext_length","ciphertext_b64","tag_b64"];
 }
 
 sealed class Args
@@ -108,9 +108,19 @@ sealed class SessionState
     public required string PeerFingerprint { get; set; }
     public required string RootKey { get; set; }
     public required string SendChain { get; set; }
-    public required string ReceiveChain { get; set; }
+    // Null until the first message of the peer's current ratchet chain is due (responder at accept).
+    public string? ReceiveChain { get; set; }
     public ulong SendNumber { get; set; }
     public ulong ReceiveNumber { get; set; }
+    // DH ratchet (spec section "In-session DH ratchet"): this device's current ratchet key pair and the
+    // peer's latest ratchet public key; PreviousSendCount is the length of our previous sending chain.
+    // Sessions written by a version without the ratchet have no ratchet key and must be re-established.
+    public string? RatchetPrivate { get; set; }
+    public string? RatchetPublic { get; set; }
+    public string? PeerRatchetPublic { get; set; }
+    public ulong PreviousSendCount { get; set; }
+    public ulong RatchetSteps { get; set; }
+    // Skipped message keys, keyed "<sha256 of the sender's ratchet public key>:<message number>".
     public Dictionary<string,string> SkippedKeys { get; set; } = [];
     public List<string> SeenMessageIds { get; set; } = [];
 }
@@ -205,7 +215,13 @@ static class Commands
         using(var s=LoadSign(state.SignPrivate)) body["signature_b64"]=B64(s.SignData(Canonical.Bytes(body),HashAlgorithmName.SHA256));
         var secret=InitiatorSecret(state,eph,peerBundle,NeedString(opk,"public_b64"));
         var keys=DeriveInitial(secret,Transcript(body)); CryptographicOperations.ZeroMemory(secret);
-        state.Sessions[sessionId]=NewSession(sessionId,peerId,Fingerprint(NeedString(peerBundle,"identity_sign_public_b64")),keys,true);
+        var session=NewSession(sessionId,peerId,Fingerprint(NeedString(peerBundle,"identity_sign_public_b64")),keys,true);
+        // The responder's first ratchet key is its signed prekey; the initiator ratchets against it at once,
+        // so its first sending chain already depends on a fresh DH (the initial i2r chain is not used).
+        session.PeerRatchetPublic=B64(Unb64(NeedString(peerBundle,"signed_prekey_public_b64")));
+        session.ReceiveChain=B64(keys.r2i);
+        NewSendingRatchet(session);
+        state.Sessions[sessionId]=session;
         state.Trusted[peerId].LastBundleSequence=peerSequence;
         StateStore.Save(statePath,state); SafeFile.WriteJson(a.Need("out"),body); Console.WriteLine("VTP2_SESSION_INIT_OK:"+sessionId);
     }
@@ -230,7 +246,12 @@ static class Commands
         var opkId=NeedString(req,"one_time_prekey_id"); if(!state.OneTimePrekeys.Remove(opkId,out var opkPrivate)) throw new VtpException("VTP2_OPK_CONSUMED_OR_UNKNOWN");
         var secret=ResponderSecret(state,spkPrivate,NeedString(req,"ephemeral_public_b64"),bundle,opkPrivate);
         var keys=DeriveInitial(secret,Transcript(req)); CryptographicOperations.ZeroMemory(secret);
-        var peerId=NeedString(bundle,"device_id"); state.Sessions[sessionId]=NewSession(sessionId,peerId,Fingerprint(NeedString(bundle,"identity_sign_public_b64")),keys,false);
+        var peerId=NeedString(bundle,"device_id"); var session=NewSession(sessionId,peerId,Fingerprint(NeedString(bundle,"identity_sign_public_b64")),keys,false);
+        // The responder's first ratchet key pair is the signed prekey the initiator used; it may send at
+        // once on the initial r2i chain and has no receiving chain until the initiator's first message.
+        using(var spk=LoadDh(spkPrivate)){ session.RatchetPrivate=B64(spk.ExportPkcs8PrivateKey()); session.RatchetPublic=B64(spk.ExportSubjectPublicKeyInfo()); }
+        session.ReceiveChain=null;
+        state.Sessions[sessionId]=session;
         var t=state.Trusted[peerId]; var initSeq=NeedLong(bundle,"sequence"); if(initSeq<t.LastBundleSequence) throw new VtpException("VTP2_BUNDLE_ROLLBACK"); t.LastBundleSequence=initSeq;
         StateStore.Save(statePath,state); Console.WriteLine("VTP2_SESSION_ACCEPT_OK:"+sessionId);
     }
@@ -239,11 +260,12 @@ static class Commands
     {
         var statePath=a.Need("state"); var state=StateStore.Load(statePath); var session=NeedSession(state,a.Need("session"));
         var contentType=a.Get("content-type","application/octet-stream"); if(contentType.Length>128||contentType.Any(c=>c<0x20||c>0x7e)) throw new VtpException("VTP2_BAD_CONTENT_TYPE");
+        RequireRatchet(session);
         var plain=SafeFile.Read(a.Need("in"),Protocol.MaxPlain); var messageId=RandomId(); var number=session.SendNumber;
         if(number==ulong.MaxValue) throw new VtpException("VTP2_COUNTER_EXHAUSTED");
         var chain=Unb64(session.SendChain); var (mk,next)=Advance(chain); CryptographicOperations.ZeroMemory(chain);
         var nonce=RandomNumberGenerator.GetBytes(12); var created=Now();
-        var header=new JsonObject{{"schema","vtp.message.v2"},{"suite",Suite},{"session_id",session.SessionId},{"sender_device_id",state.DeviceId},{"recipient_device_id",session.PeerDeviceId},{"message_id",messageId},{"message_number",number},{"created_utc",created.ToString("O")},{"expires_utc",created.Add(Protocol.MessageLifetime).ToString("O")},{"content_type",contentType},{"nonce_b64",B64(nonce)},{"ciphertext_length",plain.Length}};
+        var header=new JsonObject{{"schema","vtp.message.v2"},{"suite",Suite},{"session_id",session.SessionId},{"sender_device_id",state.DeviceId},{"recipient_device_id",session.PeerDeviceId},{"message_id",messageId},{"ratchet_public_b64",session.RatchetPublic},{"previous_chain_length",session.PreviousSendCount},{"message_number",number},{"created_utc",created.ToString("O")},{"expires_utc",created.Add(Protocol.MessageLifetime).ToString("O")},{"content_type",contentType},{"nonce_b64",B64(nonce)},{"ciphertext_length",plain.Length}};
         var cipher=new byte[plain.Length]; var tag=new byte[16]; using(var c=new ChaCha20Poly1305(mk)) c.Encrypt(nonce,plain,cipher,tag,Canonical.Bytes(header));
         header["ciphertext_b64"]=B64(cipher); header["tag_b64"]=B64(tag);
         // The receiver refuses envelopes above MaxInput: never burn a message number on one.
@@ -263,28 +285,40 @@ static class Commands
         var created=ParseTime(NeedString(env,"created_utc")); var expires=ParseTime(NeedString(env,"expires_utc")); var now=Now();
         if(created>now.Add(Protocol.ClockSkew)) throw new VtpException("VTP2_MESSAGE_FROM_FUTURE"); if(expires<now) throw new VtpException("VTP2_MESSAGE_EXPIRED");
         if(expires-created>Protocol.MessageLifetime+Protocol.ClockSkew) throw new VtpException("VTP2_MESSAGE_LIFETIME_TOO_LONG");
-        var n=NeedUlong(env,"message_number");
-        if(n>session.ReceiveNumber && (n-session.ReceiveNumber>(ulong)Protocol.MaxSkippedKeys || (ulong)session.SkippedKeys.Count+(n-session.ReceiveNumber)>(ulong)Protocol.MaxSkippedKeys)) throw new VtpException("VTP2_SKIP_LIMIT");
+        RequireRatchet(session);
+        var n=NeedUlong(env,"message_number"); var pn=NeedUlong(env,"previous_chain_length");
+        var senderRatchet=B64(Decode(NeedString(env,"ratchet_public_b64"),160));
         var cipher=Decode(NeedString(env,"ciphertext_b64"),Protocol.MaxPlain); if(NeedUlong(env,"ciphertext_length")!=(ulong)cipher.Length) throw new VtpException("VTP2_LENGTH_MISMATCH");
         var nonce=Decode(NeedString(env,"nonce_b64"),12); var tag=Decode(NeedString(env,"tag_b64"),16);
-        byte[] messageKey; byte[]? nextChain=null;
-        if(n<session.ReceiveNumber)
-        {
-            if(!session.SkippedKeys.Remove(n.ToString(),out var saved)) throw new VtpException("VTP2_REPLAY_OR_OLD_MESSAGE");
-            messageKey=Unb64(saved);
-        }
+        // Every state change below happens on this loaded copy and is saved only after the AEAD check
+        // passes: a forged or corrupted message changes nothing.
+        byte[] messageKey; byte[]? nextChain=null; var ratcheted=false;
+        if(session.SkippedKeys.Remove(SkipKey(senderRatchet,n),out var saved)) messageKey=Unb64(saved);
         else
         {
-            var chain=Unb64(session.ReceiveChain);
-            while(session.ReceiveNumber<n){var skipped=Advance(chain);CryptographicOperations.ZeroMemory(chain);chain=skipped.next;session.SkippedKeys[session.ReceiveNumber.ToString()]=B64(skipped.mk);session.ReceiveNumber++;}
-            var current=Advance(chain); CryptographicOperations.ZeroMemory(chain); messageKey=current.mk; nextChain=current.next;
+            if(!string.Equals(senderRatchet,session.PeerRatchetPublic,StringComparison.Ordinal))
+            {
+                // A new ratchet key from the peer: keep the keys still owed on the current receiving chain
+                // (up to the length the peer announces), then step the DH ratchet.
+                ulong owed=session.ReceiveChain is not null && pn>session.ReceiveNumber ? pn-session.ReceiveNumber : 0;
+                if(owed>(ulong)Protocol.MaxSkippedKeys || n>(ulong)Protocol.MaxSkippedKeys || (ulong)session.SkippedKeys.Count+owed+n>(ulong)Protocol.MaxSkippedKeys) throw new VtpException("VTP2_SKIP_LIMIT");
+                if(session.ReceiveChain is not null && session.PeerRatchetPublic is not null) SkipReceiveKeys(session,pn);
+                ReceivingRatchet(session,senderRatchet); NewSendingRatchet(session); ratcheted=true;
+            }
+            else if(n<session.ReceiveNumber) throw new VtpException("VTP2_REPLAY_OR_OLD_MESSAGE");
+            if(session.ReceiveChain is null) throw new VtpException("VTP2_NO_RECEIVING_CHAIN");
+            if(n-session.ReceiveNumber>(ulong)Protocol.MaxSkippedKeys || (ulong)session.SkippedKeys.Count+(n-session.ReceiveNumber)>(ulong)Protocol.MaxSkippedKeys) throw new VtpException("VTP2_SKIP_LIMIT");
+            SkipReceiveKeys(session,n);
+            var chain=Unb64(session.ReceiveChain); var current=Advance(chain); CryptographicOperations.ZeroMemory(chain); messageKey=current.mk; nextChain=current.next;
         }
         var aad=env.DeepClone().AsObject(); aad.Remove("ciphertext_b64"); aad.Remove("tag_b64");
         var plain=new byte[cipher.Length]; using(var c=new ChaCha20Poly1305(messageKey)) c.Decrypt(nonce,cipher,tag,plain,Canonical.Bytes(aad));
         if(nextChain is not null){session.ReceiveChain=B64(nextChain);session.ReceiveNumber++;CryptographicOperations.ZeroMemory(nextChain);}
         session.SeenMessageIds.Add(id); if(session.SeenMessageIds.Count>Protocol.ReplayJournal)session.SeenMessageIds.RemoveAt(0);
         // Replay state is committed before plaintext is released.
-        StateStore.Save(statePath,state); SafeFile.WriteBytes(a.Need("out"),plain); CryptographicOperations.ZeroMemory(messageKey); CryptographicOperations.ZeroMemory(plain); Console.WriteLine("VTP2_DECRYPT_OK:"+id);
+        StateStore.Save(statePath,state); SafeFile.WriteBytes(a.Need("out"),plain); CryptographicOperations.ZeroMemory(messageKey); CryptographicOperations.ZeroMemory(plain);
+        if(ratcheted) Console.WriteLine("VTP2_RATCHET_STEP:"+session.RatchetSteps);
+        Console.WriteLine("VTP2_DECRYPT_OK:"+id);
     }
 
     public static void Inspect(Args a) { var o=ReadObject(a.Need("in")); Console.WriteLine(NeedString(o,"schema")+":"+NeedString(o,"suite")); }
@@ -320,6 +354,11 @@ static class Commands
         var (mk,next)=Advance(new byte[32]);
         using(var h=new HMACSHA256(new byte[32])){ if(!mk.SequenceEqual(h.ComputeHash([1]))||!next.SequenceEqual(h.ComputeHash([2]))) throw new VtpException("VTP2_KAT_FAIL:CHAIN_STEP"); }
         Console.WriteLine("VTP2_KAT_OK:CHAIN_STEP");
+        // The ratchet KDF is HKDF-SHA256(ikm = DH output, salt = root key, info "VTP2 ratchet", 64 bytes).
+        var rkRoot=Enumerable.Repeat((byte)0x01,32).ToArray(); var rkDh=Enumerable.Repeat((byte)0x02,32).ToArray();
+        var expect=HKDF.DeriveKey(HashAlgorithmName.SHA256,(byte[])rkDh.Clone(),64,rkRoot,"VTP2 ratchet"u8.ToArray());
+        var (rr,rc)=RatchetKdf(rkRoot,(byte[])rkDh.Clone()); if(!rr.SequenceEqual(expect[..32])||!rc.SequenceEqual(expect[32..])) throw new VtpException("VTP2_KAT_FAIL:RATCHET_KDF");
+        Console.WriteLine("VTP2_KAT_OK:RATCHET_KDF");
         Console.WriteLine("VTP2_KAT_ALL_OK");
     }
 
@@ -361,6 +400,36 @@ static class Commands
     static (byte[] root,byte[] i2r,byte[] r2i) DeriveInitial(byte[] secret,byte[] transcript){var x=Hkdf(secret,transcript,"VTP2 initial session",96);return(x[..32],x[32..64],x[64..96]);}
     static SessionState NewSession(string id,string peer,string fp,(byte[] root,byte[] i2r,byte[] r2i) k,bool initiator)=>new(){SessionId=id,PeerDeviceId=peer,PeerFingerprint=fp,RootKey=B64(k.root),SendChain=B64(initiator?k.i2r:k.r2i),ReceiveChain=B64(initiator?k.r2i:k.i2r)};
     static SessionState NeedSession(DeviceState s,string id)=>s.Sessions.TryGetValue(id,out var x)?x:throw new VtpException("VTP2_UNKNOWN_SESSION");
+    // ---- DH ratchet ------------------------------------------------------------------------------
+    // KDF_RK: (root', chain) = HKDF-SHA256(ikm = ECDH(own ratchet, peer ratchet), salt = root, "VTP2 ratchet", 64).
+    static (byte[] root,byte[] chain) RatchetKdf(byte[] root,byte[] dh){var x=Hkdf(dh,root,"VTP2 ratchet",64);CryptographicOperations.ZeroMemory(dh);return(x[..32],x[32..64]);}
+    static void RequireRatchet(SessionState s){if(s.RatchetPrivate is null||s.RatchetPublic is null)throw new VtpException("VTP2_SESSION_LEGACY_REKEY_REQUIRED");}
+    static string SkipKey(string ratchetPublic,ulong n)=>Convert.ToHexStringLower(SHA256.HashData(Unb64(ratchetPublic)))+":"+n.ToString(System.Globalization.CultureInfo.InvariantCulture);
+    // Derive and keep the message keys of the current receiving chain up to (not including) `until`.
+    static void SkipReceiveKeys(SessionState s,ulong until)
+    {
+        if(s.ReceiveChain is null||s.PeerRatchetPublic is null||until<=s.ReceiveNumber) return;
+        var chain=Unb64(s.ReceiveChain);
+        while(s.ReceiveNumber<until){var step=Advance(chain);CryptographicOperations.ZeroMemory(chain);chain=step.next;s.SkippedKeys[SkipKey(s.PeerRatchetPublic,s.ReceiveNumber)]=B64(step.mk);CryptographicOperations.ZeroMemory(step.mk);s.ReceiveNumber++;}
+        s.ReceiveChain=B64(chain); CryptographicOperations.ZeroMemory(chain);
+    }
+    // Receiving half: a new peer ratchet key gives a new receiving chain from ECDH(our current key, theirs).
+    static void ReceivingRatchet(SessionState s,string peerRatchet)
+    {
+        byte[] dh; using(var own=LoadDh(s.RatchetPrivate!)) dh=Agree(own,peerRatchet);
+        var (root,chain)=RatchetKdf(Unb64(s.RootKey),dh);
+        s.RootKey=B64(root); s.ReceiveChain=B64(chain); s.PeerRatchetPublic=peerRatchet; s.ReceiveNumber=0;
+        CryptographicOperations.ZeroMemory(root); CryptographicOperations.ZeroMemory(chain);
+    }
+    // Sending half: a fresh ratchet key pair and a new sending chain from ECDH(new key, peer's key).
+    static void NewSendingRatchet(SessionState s)
+    {
+        using var k=ECDiffieHellman.Create(ECCurve.NamedCurves.nistP256);
+        var (root,chain)=RatchetKdf(Unb64(s.RootKey),Agree(k,s.PeerRatchetPublic!));
+        s.RootKey=B64(root); s.SendChain=B64(chain); s.PreviousSendCount=s.SendNumber; s.SendNumber=0;
+        s.RatchetPrivate=B64(k.ExportPkcs8PrivateKey()); s.RatchetPublic=B64(k.ExportSubjectPublicKeyInfo()); s.RatchetSteps++;
+        CryptographicOperations.ZeroMemory(root); CryptographicOperations.ZeroMemory(chain);
+    }
     static (byte[] mk,byte[] next) Advance(byte[] chain){using var h1=new HMACSHA256(chain);var mk=h1.ComputeHash([1]);using var h2=new HMACSHA256(chain);return(mk,h2.ComputeHash([2]));}
     static byte[] Hkdf(byte[] ikm,byte[] salt,string info,int len)=>HKDF.DeriveKey(HashAlgorithmName.SHA256,ikm,len,salt,Encoding.UTF8.GetBytes(info));
     static ECDsa LoadSign(string b){var x=ECDsa.Create();x.ImportPkcs8PrivateKey(Unb64(b),out _);return x;} static ECDiffieHellman LoadDh(string b){var x=ECDiffieHellman.Create();x.ImportPkcs8PrivateKey(Unb64(b),out _);return x;}
