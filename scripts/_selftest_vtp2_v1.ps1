@@ -94,7 +94,9 @@ $hugeJson=Join-Path $Root "huge.json";[IO.File]::WriteAllBytes($hugeJson,(New-Ob
 Expect-Fail "VTP2_INPUT_TOO_LARGE" @("inspect","--in",$hugeJson)
 
 $concurrentPlain=Join-Path $Root "concurrent.txt";[IO.File]::WriteAllText($concurrentPlain,"concurrent-secret",[Text.UTF8Encoding]::new($false));$jobs=@()
-for($i=0;$i -lt 6;$i++){$out=Join-Path $Root ("concurrent-"+$i+".json");$jobs+=Start-Process -FilePath dotnet -ArgumentList @($Dll,"encrypt","--state",$Alice,"--session",$Session,"--in",$concurrentPlain,"--out",$out) -NoNewWindow -PassThru}
+# Read each process handle at once: Windows PowerShell 5.1 reports no ExitCode for a Start-Process
+# -PassThru process whose handle was first touched after it exited.
+for($i=0;$i -lt 6;$i++){$out=Join-Path $Root ("concurrent-"+$i+".json");$jobs+=Start-Process -FilePath dotnet -ArgumentList @($Dll,"encrypt","--state",$Alice,"--session",$Session,"--in",$concurrentPlain,"--out",$out) -NoNewWindow -PassThru;[void]$jobs[-1].Handle}
 $jobs|ForEach-Object{$_.WaitForExit();if($_.ExitCode-ne 0){throw "VTP2_SELFTEST_FAIL:CONCURRENT_SEND"}}
 $numbers=@(Get-ChildItem -LiteralPath $Root -Filter "concurrent-*.json"|ForEach-Object{[uint64](Get-Content -LiteralPath $_.FullName -Raw|ConvertFrom-Json).message_number})
 if(@($numbers|Sort-Object -Unique).Count-ne 6){throw "VTP2_SELFTEST_FAIL:CONCURRENT_COUNTER_REUSE"}
