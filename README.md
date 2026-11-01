@@ -231,6 +231,8 @@ Current distributable release:
 Next release (draft, published when the governed-delivery branch merges): covenant-courier-v0.2.0-product-core,
 built by `scripts/courier_build_release_v1.ps1 -Version v0.2.0-product-core` (ZIP of a clean commit, release
 manifest, sha256sums, clean-extract smoke of `courier.ps1 verify` and `vtp2.ps1 verify`).
+To publish: run the `release (draft)` workflow (Actions tab, on `main`, version `v0.2.0-product-core`); it builds
+and smoke-tests the bundle on Windows and attaches it to a draft release for the owner to publish.
 
 Earlier v0.1.0 through v0.1.4 release assets are superseded.
 ## Public preview docs
