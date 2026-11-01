@@ -39,9 +39,29 @@ if(-not (Test-Path -LiteralPath $SigPath)){
 }
 
 function Invoke-SshVerify([string]$AllowedPath){
+  $sshArgs = ('-Y verify -f "{0}" -I "{1}" -n "{2}" -s "{3}"' -f $AllowedPath, $SignerIdentity, $Namespace, $SigPath)
+  if($PSVersionTable.PSVersion.Major -lt 6 -and $env:ComSpec){
+    # Windows PowerShell 5.1 (.NET Framework): a redirected stdin is a StreamWriter that writes the
+    # console input encoding's preamble (a UTF-8 BOM when the console code page is 65001) before any
+    # message byte, so the signed bytes no longer match. Let cmd feed the file to ssh-keygen as-is.
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $env:ComSpec
+    $psi.Arguments = ('/d /s /c ""{0}" {1} < "{2}""' -f $SSHKeygen, $sshArgs, $MessagePath)
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError  = $true
+    $psi.CreateNoWindow = $true
+    $p = New-Object System.Diagnostics.Process
+    $p.StartInfo = $psi
+    [void]$p.Start()
+    $stdout = $p.StandardOutput.ReadToEnd()
+    $stderr = $p.StandardError.ReadToEnd()
+    $p.WaitForExit()
+    return [pscustomobject]@{ ExitCode = $p.ExitCode; Message = ($stdout + "`n" + $stderr).Trim() }
+  }
   $psi = New-Object System.Diagnostics.ProcessStartInfo
   $psi.FileName = $SSHKeygen
-  $psi.Arguments = ('-Y verify -f "{0}" -I "{1}" -n "{2}" -s "{3}"' -f $AllowedPath, $SignerIdentity, $Namespace, $SigPath)
+  $psi.Arguments = $sshArgs
   $psi.UseShellExecute = $false
   $psi.RedirectStandardInput  = $true
   $psi.RedirectStandardOutput = $true
