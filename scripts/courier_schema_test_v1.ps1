@@ -15,7 +15,9 @@ $Expected = @(
   "covenant_courier.product_receipt.v1.json",
   "covenant_courier.delivery.v1.json",
   "covenant_courier.product_policy.v1.json",
-  "covenant_courier.product_receipt_chain.v1.json"
+  "covenant_courier.product_receipt_chain.v1.json",
+  "covenant_courier.vtp2_binding.v1.json",
+  "covenant_courier.settings.v1.json"
 )
 
 function Require-Prop {
@@ -68,7 +70,7 @@ if(-not (Test-Path -LiteralPath $policyPath -PathType Leaf)){ throw "COVENANT_CO
 $policy = Get-Content -LiteralPath $policyPath -Raw | ConvertFrom-Json
 if([string]$policy.schema -ne "covenant_courier.product_policy.v1"){ throw "COVENANT_COURIER_SCHEMA_TEST_FAIL:PRODUCT_POLICY_SCHEMA" }
 if($policy.profiles.PSObject.Properties.Name -notcontains [string]$policy.default_profile){ throw "COVENANT_COURIER_SCHEMA_TEST_FAIL:PRODUCT_POLICY_DEFAULT_PROFILE" }
-$allowedProfileFields = @("allowed_recipient_nodes","max_payload_bytes","require_utf8_payload","restricted_dictionary","restricted_action","notification_display_mode","covenant_gate","covenant_gate_signer")
+$allowedProfileFields = @("allowed_recipient_nodes","max_payload_bytes","require_utf8_payload","restricted_dictionary","restricted_action","notification_display_mode","covenant_gate","covenant_gate_signer","payload_encryption")
 foreach($p in $policy.profiles.PSObject.Properties){
   foreach($n in $p.Value.PSObject.Properties.Name){ if($allowedProfileFields -notcontains $n){ throw ("COVENANT_COURIER_SCHEMA_TEST_FAIL:PRODUCT_POLICY_UNKNOWN_FIELD:" + $p.Name + ":" + $n) } }
 }

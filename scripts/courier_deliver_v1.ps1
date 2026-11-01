@@ -29,6 +29,7 @@ $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "_lib_covenant_courier_product_v1.ps1")
 . (Join-Path $PSScriptRoot "_lib_courier_covenant_gate_v1.ps1")
+. (Join-Path $PSScriptRoot "_lib_courier_vtp2_v1.ps1")
 
 $RepoRoot = (Resolve-Path $RepoRoot).Path
 $MaxPayloadBytes = 786432
@@ -94,7 +95,7 @@ $inputError = $null
 try { $message = CC-ReadJsonFile $MessagePath } catch { $inputError = "MESSAGE_INVALID_JSON" }
 if($null -eq $inputError){
   try {
-    CC-RequireExactProps $message @("schema","message_id","sender_identity","recipient_identity","sender_node_id","recipient_node_id","session_id","policy_profile","notification_preview","payload_sha256","created_utc") @("organization_id") "MESSAGE"
+    CC-RequireExactProps $message @("schema","message_id","sender_identity","recipient_identity","sender_node_id","recipient_node_id","session_id","policy_profile","notification_preview","payload_sha256","created_utc") @("organization_id","origin") "MESSAGE"
     if([string]$message.schema -cne "covenant_courier.message.v1"){ throw "MESSAGE:BAD_SCHEMA" }
     foreach($f in @("message_id","sender_node_id","recipient_node_id","session_id","policy_profile")){
       if(([string]$message.$f) -cnotmatch $IdPattern -or ([string]$message.$f).Contains("..")){ throw ("MESSAGE:BAD_" + $f.ToUpperInvariant()) }
@@ -103,6 +104,7 @@ if($null -eq $inputError){
     if($null -eq $message.notification_preview -or $message.notification_preview -isnot [string]){ throw "MESSAGE:BAD_NOTIFICATION_PREVIEW" }
     if([string]::IsNullOrWhiteSpace((CC-StringField $message "created_utc"))){ throw "MESSAGE:EMPTY_CREATED_UTC" }
     if([string]$message.payload_sha256 -cnotmatch '^[a-f0-9]{64}\z'){ throw "MESSAGE:BAD_PAYLOAD_SHA256" }
+    if(CC-HasProp $message "origin"){ if(@("human","ai","service") -cnotcontains [string]$message.origin){ throw "MESSAGE:BAD_ORIGIN" } }
     if(CC-HasProp $message "organization_id"){ if($null -ne $message.organization_id -and $message.organization_id -isnot [string]){ throw "MESSAGE:BAD_ORGANIZATION_ID" } }
   } catch { $inputError = ([string]$_.Exception.Message -replace '[^A-Za-z0-9_:]','_') }
 }
@@ -147,7 +149,9 @@ try {
 if($null -eq $profile){
   Decide "reject" "POLICY_PROFILE_UNKNOWN"
 } else {
-  CC-RequireExactProps $profile @("allowed_recipient_nodes","max_payload_bytes","require_utf8_payload","restricted_dictionary","restricted_action","notification_display_mode","covenant_gate") @("covenant_gate_signer") "POLICY_PROFILE"
+  CC-RequireExactProps $profile @("allowed_recipient_nodes","max_payload_bytes","require_utf8_payload","restricted_dictionary","restricted_action","notification_display_mode","covenant_gate") @("covenant_gate_signer","payload_encryption") "POLICY_PROFILE"
+  $encryption = $(if(CC-HasProp $profile "payload_encryption"){ [string]$profile.payload_encryption } else { "none" })
+  if(@("none","vtp2") -cnotcontains $encryption){ throw "POLICY_PROFILE_BAD_PAYLOAD_ENCRYPTION" }
   $displayMode = [string]$profile.notification_display_mode
   if(@("minimal","generic","redacted","full_safe") -cnotcontains $displayMode){ throw "POLICY_PROFILE_BAD_DISPLAY_MODE" }
   if(@("off","advisory","required") -cnotcontains [string]$profile.covenant_gate){ throw "POLICY_PROFILE_BAD_COVENANT_GATE" }
@@ -223,6 +227,15 @@ if($null -eq $profile){
 
 if($decision -eq "redact_notification"){ $displayMode = "redacted" }
 
+# Payload encryption the profile requires: a VTP v2 session bound to this Courier session. Without
+# one nothing is sent (the message waits in quarantine as require_stronger_session).
+$vtp2Binding = $null
+if(@("allow","redact_notification") -contains $decision -and $null -ne $profile -and $encryption -eq "vtp2"){
+  try { $vtp2Binding = CV2-ReadBinding $RepoRoot ([string]$message.session_id) ([string]$message.sender_node_id) ([string]$message.recipient_node_id) }
+  catch { $vtp2Binding = $null; Decide "reject" ("VTP2_BINDING_INVALID:" + ([string]$_.Exception.Message -replace '[^A-Za-z0-9_:]','_')) }
+  if($null -eq $vtp2Binding -and @("allow","redact_notification") -contains $decision){ Decide "require_stronger_session" "VTP2_SESSION_NOT_BOUND" }
+}
+
 $decisionDoc = [ordered]@{
   schema = "covenant_courier.policy_decision.v1"
   decision_id = ("ccdec-" + (CC-Sha256Text ($messageId + "|" + $actualPayloadSha + "|" + $policyHash + "|" + $decision + "|" + $reason)).Substring(0,32))
@@ -271,7 +284,21 @@ try {
     message = (CC-ToOrderedTree $message)
     policy_decision = $decisionDoc
     notification = $notification
-    payload_b64 = [Convert]::ToBase64String($payloadBytes)
+  }
+  if($null -ne $vtp2Binding){
+    # Encrypt exactly the bytes that were hashed and checked by policy (no re-read of the input).
+    $tmpDir = Join-Path $RepoRoot "runtime\tmp"; CC-EnsureDir $tmpDir
+    $plainTmp = Join-Path $tmpDir ("vtp2-plain-" + [guid]::NewGuid().ToString("N") + ".bin")
+    $cipherOut = Join-Path $OutDir "payload.vtp2.json"
+    try {
+      [System.IO.File]::WriteAllBytes($plainTmp,[byte[]]$payloadBytes)
+      $enc = CV2-Invoke @("encrypt","--state",(CV2-StatePath $RepoRoot ([string]$message.sender_node_id)),"--session",[string]$vtp2Binding.vtp2_session_id,"--in",$plainTmp,"--out",$cipherOut,"--content-type","application/octet-stream")
+    } finally { if(Test-Path -LiteralPath $plainTmp){ Remove-Item -LiteralPath $plainTmp -Force } }
+    if($enc.Code -ne 0){ Write-Host $enc.Text.Trim(); throw ("VTP2_ENCRYPT_FAILED:" + (CV2-Token $enc.Text ("EXIT_" + $enc.Code))) }
+    $envelope["payload_vtp2_b64"] = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($cipherOut))
+    Write-Host ("COVENANT_COURIER_DELIVER_ENCRYPTION: vtp2 session=" + [string]$vtp2Binding.vtp2_session_id)
+  } else {
+    $envelope["payload_b64"] = [Convert]::ToBase64String([byte[]]$payloadBytes)
   }
   $deliveryPath = Join-Path $OutDir "delivery.json"
   [void](CC-WriteDocument $deliveryPath $envelope)

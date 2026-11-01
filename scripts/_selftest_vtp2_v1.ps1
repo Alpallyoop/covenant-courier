@@ -166,4 +166,12 @@ $jsonFiles=Get-ChildItem -LiteralPath $Root -Filter *.json
 foreach($f in $jsonFiles){$t=Get-Content -LiteralPath $f.FullName -Raw;if($t.Contains("secret-vtp2-value") -or $t.Contains("responder-secret") -or $t.Contains("fresh-secret-for-tamper") -or $t.Contains("concurrent-secret")){throw ("VTP2_SELFTEST_FAIL:PLAINTEXT_LEAK:"+$f.Name)}}
 foreach($st in @($Alice,$Bob,$Carol)){$statePrefix=[Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes($st));if($statePrefix.Contains("SignPrivate") -or $statePrefix.Contains("-device")){throw "VTP2_SELFTEST_FAIL:STATE_NOT_PROTECTED"}}
 
+# The PowerShell wrappers must pass "--name value" options through untouched (vtp2.ps1, courier-secure.ps1).
+$hostExe=[Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+$wState=Join-Path $Root "wrapper.state";$wBundle=Join-Path $Root "wrapper.bundle.json"
+& $hostExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "courier-secure.ps1") init -State $wState -Device "wrapper-device" | Out-Host
+if($LASTEXITCODE -ne 0){throw "VTP2_SELFTEST_FAIL:WRAPPER_INIT"}
+& $hostExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "vtp2.ps1") bundle --state $wState --out $wBundle | Out-Host
+if($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $wBundle)){throw "VTP2_SELFTEST_FAIL:WRAPPER_OUT_OPTION"}
+
 Write-Host "VTP2_SELFTEST_OK"

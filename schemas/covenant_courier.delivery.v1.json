@@ -2,15 +2,58 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "covenant_courier.delivery.v1",
   "title": "Covenant Courier delivery envelope v1",
-  "description": "The signed artifact a product delivery frame carries: the product message, its policy decision and the payload. Written as canonical JSON (sorted keys, compact, LF). The transport signature (ssh-keygen -Y sign, namespace courier/message) covers these exact bytes. The receiver recomputes payload_sha256 and checks it against message.payload_sha256 and the sender's product receipt.",
+  "description": "The signed artifact a product delivery frame carries: the product message, its policy decision and the payload. Written as canonical JSON (sorted keys, compact, LF). The transport signature (ssh-keygen -Y sign, namespace courier/message) covers these exact bytes. The receiver recomputes payload_sha256 and checks it against message.payload_sha256 and the sender's product receipt. Exactly one payload form: payload_b64 (plaintext) or payload_vtp2_b64 (encrypted, required by profiles with payload_encryption vtp2; a receiver never accepts payload_b64 on a session that has a VTP v2 binding).",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "message", "policy_decision", "notification", "payload_b64"],
+  "required": [
+    "schema",
+    "message",
+    "policy_decision",
+    "notification"
+  ],
   "properties": {
-    "schema": { "const": "covenant_courier.delivery.v1" },
-    "message": { "$ref": "covenant_courier.message.v1" },
-    "policy_decision": { "$ref": "covenant_courier.policy_decision.v1" },
-    "notification": { "$ref": "covenant_courier.notification.v1" },
-    "payload_b64": { "type": "string", "contentEncoding": "base64" }
-  }
+    "schema": {
+      "const": "covenant_courier.delivery.v1"
+    },
+    "message": {
+      "$ref": "covenant_courier.message.v1"
+    },
+    "policy_decision": {
+      "$ref": "covenant_courier.policy_decision.v1"
+    },
+    "notification": {
+      "$ref": "covenant_courier.notification.v1"
+    },
+    "payload_b64": {
+      "type": "string",
+      "contentEncoding": "base64"
+    },
+    "payload_vtp2_b64": {
+      "type": "string",
+      "contentEncoding": "base64",
+      "description": "Base64 of a vtp.message.v2 envelope (spec/VTP_V2_SECURITY_PROTOCOL.md) carrying the payload under the VTP v2 session bound to message.session_id (covenant_courier.vtp2_binding.v1). The receiver decrypts with the recipient node's device state and recomputes message.payload_sha256 over the plaintext."
+    }
+  },
+  "oneOf": [
+    {
+      "required": [
+        "payload_b64"
+      ],
+      "not": {
+        "required": [
+          "payload_vtp2_b64"
+        ]
+      }
+    },
+    {
+      "required": [
+        "payload_vtp2_b64"
+      ],
+      "not": {
+        "required": [
+          "payload_b64"
+        ]
+      }
+    }
+  ]
 }

@@ -1,0 +1,67 @@
+name: verify-all (Windows)
+
+# The release gate in .constellation/INTEGRATION_WORK.md: `courier.ps1 verify-all` on Windows, under both
+# Windows PowerShell 5.1 and PowerShell 7. Needs ssh-keygen (Windows OpenSSH client, present on the
+# runner image) and the .NET 10 SDK for VTP v2 (state protected with DPAPI on Windows).
+# The real-Covenant-Gate delivery cases run only when COVENANT_GATE_ROOT is set; they are not part of
+# this workflow because Covenant Gate is a separate repository.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-all:
+    name: verify-all (${{ matrix.shell }})
+    runs-on: windows-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: [powershell, pwsh]
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      DOTNET_NOLOGO: "1"
+      POWERSHELL_TELEMETRY_OPTOUT: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Tool versions
+        shell: pwsh
+        run: |
+          dotnet --version
+          & "$env:WINDIR\System32\OpenSSH\ssh-keygen.exe" -V 2>&1 | Select-Object -First 1
+          $PSVersionTable.PSVersion.ToString()
+
+      - name: courier.ps1 verify-all
+        shell: ${{ matrix.shell }}
+        run: |
+          # Continue: Windows PowerShell 5.1 turns redirected native stderr into terminating errors under Stop.
+          $ErrorActionPreference = "Continue"
+          $exe = if ("${{ matrix.shell }}" -eq "powershell") { "powershell.exe" } else { "pwsh" }
+          $log = Join-Path $env:RUNNER_TEMP "verify-all.log"
+          & $exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\courier.ps1 verify-all -RepoRoot . 2>&1 | Tee-Object -FilePath $log
+          if ($LASTEXITCODE -ne 0) { throw "verify-all exited $LASTEXITCODE" }
+          $text = Get-Content -Raw -LiteralPath $log
+          foreach ($t in @("COVENANT_COURIER_VERIFY_ALL_OK", "COVENANT_COURIER_VERIFY_OK")) {
+            if ($text -notmatch [regex]::Escape($t)) { throw "missing token $t" }
+          }
+
+      - name: Upload proofs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: courier-proofs-${{ matrix.shell }}
+          path: |
+            proofs/receipts
+            runtime/**/*.log
+          if-no-files-found: ignore
+          retention-days: 7

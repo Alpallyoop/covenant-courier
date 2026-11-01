@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "covenant_courier.vtp2_binding.v1",
+  "title": "Covenant Courier session to VTP v2 session binding v1",
+  "description": "registry/vtp2_bindings/<session_id>.json, written by courier_secure_session_v1.ps1. Device ids are courier-<node_id>; fingerprints are SHA-256 of each device's VTP v2 identity signing key, pinned when the session was established.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "session_id",
+    "sender_node_id",
+    "recipient_node_id",
+    "sender_device_id",
+    "recipient_device_id",
+    "vtp2_session_id",
+    "sender_fingerprint",
+    "recipient_fingerprint"
+  ],
+  "properties": {
+    "schema": {
+      "const": "covenant_courier.vtp2_binding.v1"
+    },
+    "session_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "sender_node_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "recipient_node_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sender_device_id": {
+      "type": "string",
+      "pattern": "^courier-"
+    },
+    "recipient_device_id": {
+      "type": "string",
+      "pattern": "^courier-"
+    },
+    "vtp2_session_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "sender_fingerprint": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "recipient_fingerprint": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

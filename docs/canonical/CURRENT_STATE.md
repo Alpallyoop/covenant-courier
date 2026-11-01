@@ -1,6 +1,6 @@
 # Current state - Covenant Courier
 
-Recorded 2026-10-15. Describes what the implementation does today, not the target. Identity, ownership
+Recorded 2026-10-15, updated 2026-11-01. Describes what the implementation does today, not the target. Identity, ownership
 and integrations proposed for the registry: `docs/proposals/0001-covenant-courier-ownership-and-integrations.md`.
 
 ## What runs
@@ -13,22 +13,28 @@ and integrations proposed for the registry: `docs/proposals/0001-covenant-courie
 | Constellation integration receipts | Emitted by Courier for `covenant-courier > covenant-gate` and `covenant-courier > neverlost`, byte-exact to `constellation.integration.receipt.v1`. | `scripts/_selftest_constellation_integration_receipts_v1.ps1` |
 | Covenant Gate adapter | Invoke mode (Covenant Gate's sealed evaluator, out of process) and signed-document mode. Off by default. | deliver selftest (+ real Covenant Gate when `COVENANT_GATE_ROOT` is set) |
 | NeverLost trust import | Pinned import of a principals trust bundle into a third trust root. | `scripts/_selftest_courier_trust_import_v1.ps1` |
+| NeverLost-issued node signers | `courier.ps1 node-signer` creates a node key for `single-tenant/device_agent/courier/<node-id>` and switches the node's registry principal only after a trust import carries that exact key. | `scripts/_selftest_courier_node_signer_v1.ps1` |
 | VTP v1 transport | Frames, listener, node loop, outbox, replay guard, UDP wire adapter (bindings from the session registry). | `vtp.ps1 verify`, `_RUN_*` suites |
-| VTP v2 secure core (`vtp2.ps1`) | X3DH-style P-256 handshake, per-direction symmetric chains, ChaCha20-Poly1305, rotation, strict decoding, KATs. Not yet used by the product delivery path. | `vtp2.ps1 verify` |
+| VTP v2 secure core (`vtp2.ps1`) | X3DH-style P-256 handshake, per-direction symmetric chains, ChaCha20-Poly1305, rotation, strict decoding, KATs. | `vtp2.ps1 verify` |
+| Payload encryption in delivery | Profiles with `payload_encryption: vtp2` (shipped: `confidential`) send the payload only as a `vtp.message.v2` under the VTP v2 session bound to the Courier session (`courier.ps1 secure-session`); unbound sessions quarantine; receive decrypts and refuses a plaintext downgrade. | deliver selftest (VTP v2 cases) |
+| Message origin | Optional `origin` (`human`/`ai`/`service`) carried to Covenant Gate as `action.origin` (`unspecified` when absent). | deliver selftest |
 
 ## Known limits (true today)
 
 - Developer preview. Not a production E2E messenger; see `SECURITY.md` and
   `docs/SECURITY_HARDENING_PLAN.md`. Product delivery frames are signed and hash-bound but not
-  encrypted at rest or in the filesystem-drop transport; payload confidentiality on the wire exists only
-  in the v1 UDP adapter (transitional AES-CBC+HMAC with a local key envelope) and in VTP v2, which the
-  product path does not use yet.
+  encrypted at rest or in the filesystem-drop transport unless the profile requires VTP v2 payload
+  encryption; otherwise payload confidentiality on the wire exists only in the v1 UDP adapter
+  (transitional AES-CBC+HMAC with a local key envelope). Released inbox payloads are plaintext on disk.
 - VTP v2 has no in-session DH ratchet (post-compromise recovery needs a new session).
 - Local signing keys are created by `courier_bootstrap_local_trust_v1.ps1` under `proofs/keys/` without
-  a passphrase (local development trust). Production signers should come from NeverLost.
+  a passphrase (local development trust). Production signers should come from NeverLost
+  (`courier.ps1 node-signer`); node keys it creates are also unencrypted files under `proofs/keys/`.
 - `courier.ps1 receive` processes the newest unsettled sent frame; there is no inbox subscription or
   background service (the scheduled-task node loop is Windows-only and opt-in).
-- Covenant Gate currently answers `DEFAULT_DENY` for `courier.deliver` (no rule in its canonical policy).
+- Covenant Gate's `main` answers `DEFAULT_DENY` for every `courier.deliver` until its branch
+  `claude/courier-deliver-human-rule` (rule `allow.courier.deliver.human`, proposal 0025) is merged; after
+  that only `origin: human` is allowed. `origin` is sender-asserted, not authenticated by Covenant Gate.
 - Several older self-tests write into tracked `test_vectors/` folders, so running them changes
   tracked files (pre-existing behaviour, left as is).
 

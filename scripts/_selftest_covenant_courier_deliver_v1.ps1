@@ -43,6 +43,11 @@ $r = Child (Join-Path $PSScriptRoot "courier_close_session_v1.ps1") @("-RepoRoot
 # Test policy: the confidential profile names the Covenant Gate decision signer.
 $pol = CC-ReadJsonFile (Join-Path $Sandbox "policy\courier_product_policy_v1.json")
 $pol.profiles.confidential | Add-Member -NotePropertyName "covenant_gate_signer" -NotePropertyValue "courier-local@covenant"
+# Gate cases test the gate alone; VTP v2 payload encryption is tested through its own "sealed" profile.
+$pol.profiles.confidential.payload_encryption = "none"
+$sealed = CC-ParseJson (CC-ToCanonicalJson $pol.profiles.default)
+$sealed.payload_encryption = "vtp2"
+$pol.profiles | Add-Member -NotePropertyName "sealed" -NotePropertyValue $sealed
 $TestPolicy = Join-Path $Run "policy.test.json"
 [void](CC-WriteDocument $TestPolicy (CC-ToOrderedTree $pol))
 
@@ -210,16 +215,51 @@ $v = Child (Join-Path $PSScriptRoot "courier_integration_receipts_v1.ps1") @("-R
 Must ($v.Code -eq 0) ("CIR_CHAIN_VERIFY:" + $v.Text)
 
 if(-not [string]::IsNullOrWhiteSpace($env:COVENANT_GATE_ROOT)){
-  $c = New-Case "confidential" "board minutes"
-  $res = Deliver $c @("-CovenantGateRoot",$env:COVENANT_GATE_ROOT)
-  if($null -eq $res.Receipt){ Write-Host $res.Text; throw "COVENANT_COURIER_DELIVER_SELFTEST_FAIL:GATE_INVOKE_NO_RECEIPT" }
-  $last = @(Get-Content -LiteralPath $cirPath)[-1] | ConvertFrom-Json
-  Must ([string]$last.outcome -eq "ok") ("GATE_INVOKE_OUTCOME:" + [string]$last.outcome + ":" + [string]$last.error_token)
-  Write-Host ("COVENANT_COURIER_DELIVER_CASE_OK: gate-invoke-real-covenant-gate -> " + [string]$res.Receipt.decision + ":" + [string]$res.Receipt.reason_code)
-  $Cases++
+  # Against the real Covenant Gate: human-originated deliveries are allowed only if its base policy
+  # carries allow.courier.deliver.human; ai and unspecified origins are always default-deny.
+  $cgBase = Join-Path $env:COVENANT_GATE_ROOT "policy\canonical.base.v1.json"
+  $hasRule = (Test-Path -LiteralPath $cgBase) -and ([IO.File]::ReadAllText($cgBase).Contains("allow.courier.deliver.human"))
+  foreach($o in @("human","ai","")){
+    $ov = @{}; if($o -ne ""){ $ov = @{ origin = $o } }
+    $c = New-Case "confidential" "board minutes" $ov
+    $res = Deliver $c @("-CovenantGateRoot",$env:COVENANT_GATE_ROOT)
+    if($null -eq $res.Receipt){ Write-Host $res.Text; throw "COVENANT_COURIER_DELIVER_SELFTEST_FAIL:GATE_INVOKE_NO_RECEIPT" }
+    $last = @(Get-Content -LiteralPath $cirPath)[-1] | ConvertFrom-Json
+    Must ([string]$last.outcome -eq "ok") ("GATE_INVOKE_OUTCOME:" + [string]$last.outcome + ":" + [string]$last.error_token)
+    $name = "gate-invoke-real-covenant-gate-origin-" + $(if($o -eq ""){ "unspecified" } else { $o })
+    if($o -eq "human" -and $hasRule){ Expect $res 0 "sent" "POLICY_ALLOW" $name }
+    else { Expect $res 42 "rejected" "COVENANT_GATE_DENY:DEFAULT_DENY" $name }
+  }
 } else {
   Write-Host "COVENANT_COURIER_DELIVER_CASE_NOT_RUN: gate-invoke-real-covenant-gate (COVENANT_GATE_ROOT not set; not counted as a pass)"
 }
+
+# ---------------------------------------------------------------- VTP v2 payload encryption
+if($env:OS -ne "Windows_NT" -and [string]::IsNullOrWhiteSpace($env:VTP2_STATE_KEY_FILE)){
+  # A stable test key: the real repository's node states (sealed session test below) must open on
+  # the next run too. Operators set VTP2_STATE_KEY_FILE themselves; this is only the self-test's.
+  $kf = Join-Path $RepoRoot "runtime\vtp2\selftest.state.key"
+  if(-not (Test-Path -LiteralPath $kf)){ CC-EnsureDir (Split-Path -Parent $kf); [IO.File]::WriteAllBytes($kf,[Security.Cryptography.RandomNumberGenerator]::GetBytes(32)) }
+  & chmod 600 $kf
+  $env:VTP2_STATE_KEY_FILE = $kf
+}
+$c = New-Case "sealed" "sealed payload alpha"
+Expect (Deliver $c) 42 "quarantined" "REQUIRE_STRONGER_SESSION:VTP2_SESSION_NOT_BOUND" "vtp2-required-no-binding"
+$r = Child (Join-Path $PSScriptRoot "courier_secure_session_v1.ps1") @("-RepoRoot",$Sandbox,"-SessionId","session-alpha-beta-001","-LocalPair")
+Must ($r.Code -eq 0 -and $r.Text -match "COURIER_SECURE_SESSION_OK") ("SECURE_SESSION:" + $r.Text)
+$c = New-Case "sealed" "sealed payload bravo"
+$res = Deliver $c
+Expect $res 0 "sent" "POLICY_ALLOW" "vtp2-sealed-delivery"
+$envText = [IO.File]::ReadAllText((Join-Path $res.Out "delivery.json"))
+$envObj = CC-ParseJson $envText
+Must ((CC-HasProp $envObj "payload_vtp2_b64") -and -not (CC-HasProp $envObj "payload_b64")) "VTP2_ENVELOPE_FORM"
+Must (-not $envText.Contains("sealed payload bravo") -and -not $envText.Contains([Convert]::ToBase64String((CC-Utf8NoBom).GetBytes("sealed payload bravo")))) "VTP2_NO_PLAINTEXT_IN_ENVELOPE"
+$c = New-Case "sealed" "x"
+$bp = Join-Path $Sandbox "registry\vtp2_bindings\session-alpha-beta-001.json"
+$saved = [IO.File]::ReadAllText($bp)
+[IO.File]::WriteAllText($bp,$saved.Replace('"sender_node_id":"node-alpha"','"sender_node_id":"node-mallory"'))
+Expect (Deliver $c) 42 "rejected" "VTP2_BINDING_INVALID:VTP2_BINDING:NODE_MISMATCH" "vtp2-binding-tampered"
+[IO.File]::WriteAllText($bp,$saved)
 
 # ---------------------------------------------------------------- receipt chain tamper
 $rl = Join-Path $Run "chain-tamper\receipts.ndjson"; $cl = Join-Path $Run "chain-tamper\chain.ndjson"
@@ -265,6 +305,27 @@ Must ($r.Code -eq 0 -and $r.Text -match "COVENANT_COURIER_RECEIVE_OK") ("REAL_RE
 $inbox = $null; foreach($l in ($r.Text -split "`n")){ if($l -match 'COURIER_RECEIVE_INBOX:\s+(.+)$'){ $inbox = $Matches[1].Trim() } }
 Must ([IO.File]::ReadAllText((Join-Path $inbox "payload.bin")) -eq "receive selftest payload two") "INBOX_PAYLOAD"
 $Cases++; Write-Host "COVENANT_COURIER_DELIVER_CASE_OK: receive -> accepted, payload released to inbox"
+
+# Encrypted delivery end to end in the real repository, on its own session so the demo session
+# (plaintext) is unaffected; a plaintext envelope on a VTP v2-bound session is refused on receive.
+$sid = "session-alpha-beta-sealed"
+$r = Child (Join-Path $PSScriptRoot "courier_seed_demo_registry_v1.ps1") @("-RepoRoot",$RepoRoot); Must ($r.Code -eq 0) "REAL_SEED"
+$r = Child (Join-Path $PSScriptRoot "courier_open_session_v1.ps1") @("-RepoRoot",$RepoRoot,"-SessionId",$sid,"-SenderNodeId","node-alpha","-RecipientNodeId","node-beta","-NetworkId","courier-internal-net-v1","-SessionRole","message-delivery"); Must ($r.Code -eq 0) "REAL_OPEN_SEALED"
+$r = Child (Join-Path $PSScriptRoot "courier_secure_session_v1.ps1") @("-RepoRoot",$RepoRoot,"-SessionId",$sid,"-LocalPair"); Must ($r.Code -eq 0) ("REAL_SECURE_SESSION:" + $r.Text)
+$c = New-Case "default" "downgrade attempt" @{ session_id = $sid }
+$res = Deliver $c @() $RepoRoot
+Must ($res.Code -eq 0) ("REAL_PLAIN_ON_SEALED_SEND:" + $res.Text)
+$r = Child (Join-Path $RepoRoot "courier.ps1") @("receive","-RepoRoot",$RepoRoot)
+Must ($r.Code -ne 0 -and $r.Text -match "VTP2_DOWNGRADE_REFUSED") ("DOWNGRADE_NOT_REFUSED:" + $r.Text)
+$Cases++; Write-Host "COVENANT_COURIER_DELIVER_CASE_OK: plaintext-on-vtp2-session -> rejected:VTP2_DOWNGRADE_REFUSED"
+$c = New-Case "sealed" "end to end sealed payload" @{ session_id = $sid }
+$res = Deliver $c @() $RepoRoot
+Must ($res.Code -eq 0) ("REAL_SEALED_SEND:" + $res.Text)
+$r = Child (Join-Path $RepoRoot "courier.ps1") @("receive","-RepoRoot",$RepoRoot)
+Must ($r.Code -eq 0 -and $r.Text -match "COURIER_RECEIVE_DECRYPTED") ("REAL_SEALED_RECEIVE:" + $r.Text)
+$inbox = $null; foreach($l in ($r.Text -split "`n")){ if($l -match 'COURIER_RECEIVE_INBOX:\s+(.+)$'){ $inbox = $Matches[1].Trim() } }
+Must ([IO.File]::ReadAllText((Join-Path $inbox "payload.bin")) -eq "end to end sealed payload") "SEALED_INBOX_PAYLOAD"
+$Cases++; Write-Host "COVENANT_COURIER_DELIVER_CASE_OK: vtp2 sealed delivery -> decrypted and released to inbox"
 
 Write-Host ("COVENANT_COURIER_DELIVER_SELFTEST_CASES: " + $Cases)
 Write-Host "COVENANT_COURIER_DELIVER_SELFTEST_OK"

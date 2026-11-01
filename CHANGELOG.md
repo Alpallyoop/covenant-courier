@@ -1,5 +1,35 @@
 # Changelog
 
+## Unreleased (2026-11-01) - VTP v2 payload encryption, message origin
+
+### Added
+
+- Payload encryption over VTP v2 for governed delivery: profile setting `payload_encryption` (`none` |
+  `vtp2`; the `confidential` profile now requires `vtp2`). The envelope carries `payload_vtp2_b64` (a
+  `vtp.message.v2`) instead of `payload_b64`; with no VTP v2 binding the delivery is quarantined
+  (`REQUIRE_STRONGER_SESSION:VTP2_SESSION_NOT_BOUND`). Receive decrypts with the recipient node's state and
+  refuses a plaintext envelope on a bound session (`VTP2_DOWNGRADE_REFUSED`).
+- `courier.ps1 secure-session` (`scripts/courier_secure_session_v1.ps1`) binds a Courier session to a VTP v2
+  session (`registry/vtp2_bindings/<session>.json`, schema `covenant_courier.vtp2_binding.v1`): `-LocalPair`
+  for both nodes on one machine, or an existing two-machine VTP v2 session with its fingerprints.
+- Optional message `origin` (`human` | `ai` | `service`; `-Origin` on `prepare` / `send`), passed to Covenant
+  Gate as `action.origin` (`unspecified` when absent) for its `allow.courier.deliver.human` rule.
+- `courier.ps1 node-signer -Action keygen|adopt|status` (`scripts/courier_node_signer_v1.ps1`): NeverLost-issued
+  node signers. `keygen` creates the node key for `single-tenant/device_agent/courier/<node-id>` and prints the
+  public key to issue; `adopt` switches the node's registry principal only when the imported NeverLost trust
+  root lists that principal with exactly that key and namespace `courier/message`. Self-test (6 cases) in
+  `verify-all`.
+- `schemas/covenant_courier.settings.v1.json`: the settings contract the Global Workbench plugin manifest names.
+- `courier.ps1 secure-session` and `-Origin` shown in `courier.ps1 help`.
+- Delivery self-test: real Covenant Gate cases per origin, VTP v2 cases (unbound, local pair, sealed send
+  without plaintext, tampered binding, downgrade refused, sealed end-to-end receive).
+
+### Fixed
+
+- `vtp2.ps1 ... --out <file>` failed with "parameter name 'out' is ambiguous" (the param block captured it as a
+  common parameter), which also broke `courier-secure.ps1 bundle`. The script now parses its arguments itself;
+  the VTP v2 self-test runs the wrapper path as a regression check.
+
 ## Unreleased (2026-10-15) - governed delivery and Constellation integration
 
 ### Fixed

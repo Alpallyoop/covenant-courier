@@ -63,9 +63,14 @@ be treated as a substitute for a reviewed asynchronous messaging protocol.
 `courier.ps1 deliver` sends a `covenant_courier.delivery.v1` envelope signed with OpenSSH
 (`ssh-keygen -Y sign`, namespace `courier/message`) by the sender node's registered principal. The
 receiver verifies the signature, the frame hash and the envelope's binding to the sender's product
-receipt before releasing anything. The envelope is not encrypted: on the filesystem-drop transport the
-payload is readable by anyone who can read the node folders. Use VTP v2 (`vtp2.ps1`,
-`courier-secure.ps1`) where confidentiality is required; the product path does not use it yet.
+receipt before releasing anything. By default the envelope is not encrypted: on the filesystem-drop
+transport the payload is readable by anyone who can read the node folders. A profile with
+`payload_encryption: vtp2` (the shipped `confidential` profile) sends the payload only as a VTP v2
+`vtp.message.v2` under the session bound with `courier.ps1 secure-session`; with no binding nothing is
+sent (quarantined), and the receiver refuses a plaintext envelope on a bound session (downgrade). The
+fingerprints in the binding must be verified out of band when the nodes are on different machines
+(`-LocalPair` reads both from local state). The message `origin` is asserted by the sender (covered by
+its signature), not authenticated by Covenant Gate. Released inbox payloads are plaintext on disk.
 
 ## VTP v2 secure core
 

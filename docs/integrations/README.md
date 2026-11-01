@@ -10,7 +10,8 @@ when Courier is the calling side. Registry status of each edge: `docs/proposals/
 
 Input
 
-- `message.json`: a `covenant_courier.message.v1` (closed field set; `organization_id` optional).
+- `message.json`: a `covenant_courier.message.v1` (closed field set; `organization_id` and `origin`
+  (`human` | `ai` | `service`) optional; any other `origin` is `MESSAGE_INVALID:...BAD_ORIGIN`).
   `message_id`, node IDs, `session_id` and `policy_profile` must match `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`.
   `payload_sha256` must equal SHA-256 of the payload file bytes.
 - The payload file: up to 768 KiB (the profile may set less).
@@ -52,12 +53,26 @@ Policy reason codes (`reason_code`): `POLICY_ALLOW`, `RESTRICTED_TERM_NOTIFICATI
 `NODE_UNKNOWN`, `NODE_INACTIVE`, `PAYLOAD_TOO_LARGE`, `PAYLOAD_NOT_UTF8`, `RESTRICTED_TERM`,
 `QUARANTINE:<reason>`, `REQUIRE_APPROVAL:<reason>`, `COVENANT_GATE_DENY:<codes>`,
 `COVENANT_GATE_REFUSED:<token>`, `COVENANT_GATE_REQUIRED:<token>`, `COURIER_DELIVER_FAILED:<token>`,
-`COURIER_POLICY_FAILED:<token>`.
+`COURIER_POLICY_FAILED:<token>`, `REQUIRE_STRONGER_SESSION:VTP2_SESSION_NOT_BOUND`,
+`VTP2_BINDING_INVALID:<token>`.
+
+Payload encryption (profile `payload_encryption`: `none` default, `vtp2`; any other value fails closed with
+`POLICY_PROFILE_BAD_PAYLOAD_ENCRYPTION`). With `vtp2` the session must be bound to a VTP v2 session
+(`courier.ps1 secure-session -SessionId <id> -LocalPair`, or `-Vtp2SessionId -SenderFingerprint
+-RecipientFingerprint` after pairing two machines with `vtp2.ps1`; the binding is
+`registry/vtp2_bindings/<session>.json`, `covenant_courier.vtp2_binding.v1`). The envelope then carries
+`payload_vtp2_b64` (a `vtp.message.v2` under that session) instead of `payload_b64`; `payload_sha256`
+still covers the plaintext. Unbound: `quarantined`, exit 42. The shipped `confidential` profile requires
+`vtp2`. VTP v2 needs the .NET 10 SDK and protects device state with DPAPI on Windows or
+`VTP2_STATE_KEY_FILE` elsewhere.
 
 Receiving side: `courier.ps1 receive` runs the recipient node's policy loop, verifies the envelope
 against the sender's receipt (message ID, payload hash, recipient node, frame bindings, deliverable
 policy decision) and only then writes `runtime/product_messages/inbox/<node>/<message_id>/`
-(`payload.bin`, `message.json`, `policy_decision.json`, `notification.json`). A transport rejection or
+(`payload.bin`, `message.json`, `policy_decision.json`, `notification.json`). A sealed payload is
+decrypted with the recipient node's VTP v2 state first (`COURIER_RECEIVE_DECRYPTED`); a plaintext
+envelope on a session bound to VTP v2 is refused (`VTP2_DOWNGRADE_REFUSED`), as is a sealed one whose
+binding does not match (`VTP2_SESSION_MISMATCH`). A transport rejection or
 an invalid envelope writes a `rejected` product receipt (`event_type
 covenant_courier.product.receive_reject.v1`).
 
@@ -86,9 +101,13 @@ Profile setting `covenant_gate`: `off` (default), `advisory`, `required`.
 | document | `-CovenantGateDecisionPath <eval_output.json>` with `<eval_output.json>.sig` (namespace `covenant-gate/decision`) by the profile's `covenant_gate_signer`. | Signature against Courier's trust roots, then the same checks. |
 
 Eval input Courier sends (`covenantgate.eval_input.v1`): `enforcement_point: eval.request`,
-`subject {type: courier_sender, principal, node_id, claimed_identity}`, `action {type: courier.deliver}`,
+`subject {type: courier_sender, principal, node_id, claimed_identity}`, `action {type: courier.deliver,
+origin}`,
 `execution_surface: covenant-courier`, `resource {domain: courier.message, message_id, payload_sha256,
 policy_profile, recipient_claimed_identity, recipient_node_id, recipient_principal, session_id}`.
+`action.origin` is the message's optional `origin` (`human`, `ai`, `service`; set with `-Origin` on
+`prepare` / `send`), or `unspecified` when the message has none. It is asserted by the sender and covered
+by the sender's signature on the delivery envelope; Covenant Gate does not authenticate it.
 
 Outcomes: allow -> local decision stands; deny -> `rejected COVENANT_GATE_DENY:<codes>`; a refused
 document (bad signature, hash mismatch) -> `rejected`; unavailable -> `required` quarantines with
@@ -102,9 +121,13 @@ frame) and the recipient node's principal; the message's self-asserted `sender_i
 `recipient_identity` travel only as `claimed_identity` / `recipient_claimed_identity`. Receipts:
 `proofs/integration_receipts/covenant-courier__covenant-gate/receipts.ndjson`.
 
-Verified in this repository's session against Covenant Gate's real evaluator: Courier's input hash and
-evaluation ID matched Covenant Gate's; the decision was `DEFAULT_DENY` because Covenant Gate's canonical
-policy has no rule for `courier.deliver` yet (proposal 0001, section 4).
+Verified against Covenant Gate's real evaluator: Courier's input hash and evaluation ID match Covenant
+Gate's. Covenant Gate's base policy rule `allow.courier.deliver.human` (owner decision, Constellation
+proposal 0025; Covenant Gate branch `claude/courier-deliver-human-rule`) allows `courier.deliver` with
+`origin: human` (`ALLOW_RULE_MATCH:allow.courier.deliver.human`, `COURIER_DELIVER_ALLOWED`); `ai`,
+`service`, `unspecified` and every other action stay `DEFAULT_DENY`. The delivery self-test checks all
+three origins against a Covenant Gate checkout and accepts either base policy (with the rule: human ->
+`sent`; without it: `COVENANT_GATE_DENY:DEFAULT_DENY`).
 
 ## 3. NeverLost (Courier is the consumer)
 
@@ -120,6 +143,22 @@ policy has no rule for `courier.deliver` yet (proposal 0001, section 4).
 - Receipts: `proofs/integration_receipts/covenant-courier__neverlost/receipts.ndjson` (`ok`, `refused`
   for pin/format failures, `unavailable` for a missing bundle).
 
+NeverLost-issued node signers (replacing the local `courier-local@covenant` bootstrap key per node):
+
+    pwsh -File courier.ps1 node-signer -Action keygen -NodeId node-alpha     # prints principal + public key
+    # NeverLost: issue that public key for single-tenant/device_agent/courier/node-alpha,
+    #            namespace courier/message, and publish the trust bundle (pin its SHA-256)
+    pwsh -File courier.ps1 trust-import -TrustBundlePath <bundle> -ExpectedSha256 <sha>
+    pwsh -File courier.ps1 node-signer -Action adopt -NodeId node-alpha      # registry principal switches
+    pwsh -File courier.ps1 node-signer -Action status -NodeId node-alpha
+
+`adopt` refuses (`COURIER_NODE_SIGNER_FAIL:NOT_IMPORTED`) unless the imported allowed_signers lists that
+principal with exactly the node's key and namespace `courier/message`; only `single-tenant/device_agent/...`
+principals are accepted. The private key stays in `proofs/keys/` (ignored by git). Both machines of a
+two-node setup must import the same bundle, since the receiver verifies the sender's frame signature.
+Self-test: `scripts/_selftest_courier_node_signer_v1.ps1` (keygen, refusals, adopt, a delivery signed by
+the NeverLost principal verified and received).
+
 ## 4. NFL (witness)
 
 Courier never calls NFL and never blocks on it. NFL witnesses Courier's receipts by reading the
@@ -132,5 +171,9 @@ file artifact by an operator; that is not an integration record today.
 
 ## 5. Global Workbench
 
-Draft plugin manifest: proposal 0001, section 6. `vtp_tray_contract_v1.json` lists the controls and the
-receipt files a UI may read.
+Plugin manifest: proposal 0001 section 6, added to the workbench as
+`workbench-plugins/covenant-courier/plugin.manifest.json` (Global Workbench branch
+`claude/covenant-courier-plugin`, its proposal 0002). Its `settings_schema` is Courier's
+`schemas/covenant_courier.settings.v1.json` (closed: `schema`, `courier_root`, optional
+`covenant_gate_root`, `default_policy_profile`, `default_origin`). `vtp_tray_contract_v1.json` lists the
+controls and the receipt files a UI may read. The workbench reads; delivery stays a Courier command.

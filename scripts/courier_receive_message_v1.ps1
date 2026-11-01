@@ -12,6 +12,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "_lib_covenant_courier_product_v1.ps1")
+. (Join-Path $PSScriptRoot "_lib_courier_vtp2_v1.ps1")
 
 $RepoRoot = (Resolve-Path $RepoRoot).Path
 $Vtp = Join-Path $RepoRoot "vtp.ps1"
@@ -135,14 +136,39 @@ try {
   if((CC-Sha256File $envPath) -cne [string]$frame.payload_sha256){ throw "FRAME_HASH_MISMATCH" }
   $envelope = CC-ReadJsonFile $envPath -MaxBytes 1200000
   if(-not (CC-HasProp $envelope "schema") -or [string]$envelope.schema -cne "covenant_courier.delivery.v1"){ throw "NOT_A_DELIVERY_ENVELOPE" }
-  CC-RequireExactProps $envelope @("schema","message","policy_decision","notification","payload_b64") @() "ENVELOPE"
+  CC-RequireExactProps $envelope @("schema","message","policy_decision","notification") @("payload_b64","payload_vtp2_b64") "ENVELOPE"
+  $hasPlain = CC-HasProp $envelope "payload_b64"; $hasSealed = CC-HasProp $envelope "payload_vtp2_b64"
+  if($hasPlain -eq $hasSealed){ throw "ENVELOPE_PAYLOAD_FORM" }
   $m = $envelope.message
   if([string]$m.schema -cne "covenant_courier.message.v1"){ throw "ENVELOPE_MESSAGE_BAD_SCHEMA" }
   if([string]$m.message_id -cne $messageId){ throw "MESSAGE_ID_MISMATCH" }
   if($acceptedMessages.Contains($messageId)){ throw "MESSAGE_ALREADY_ACCEPTED" }
   if([string]$m.recipient_node_id -cne $NodeId){ throw "RECIPIENT_NODE_MISMATCH" }
   if([string]$m.sender_node_id -cne [string]$frame.sender_node_id -or [string]$m.session_id -cne [string]$frame.session_id){ throw "FRAME_BINDING_MISMATCH" }
-  try { $payloadBytes = [Convert]::FromBase64String([string]$envelope.payload_b64) } catch { throw "PAYLOAD_NOT_BASE64" }
+  if($hasPlain){
+    # A session bound to VTP v2 never accepts a plaintext payload (no silent downgrade).
+    if($null -ne (CV2-ReadBinding $RepoRoot ([string]$m.session_id) ([string]$m.sender_node_id) $NodeId)){ throw "VTP2_DOWNGRADE_REFUSED" }
+    try { $payloadBytes = [Convert]::FromBase64String([string]$envelope.payload_b64) } catch { throw "PAYLOAD_NOT_BASE64" }
+  } else {
+    $binding = CV2-ReadBinding $RepoRoot ([string]$m.session_id) ([string]$m.sender_node_id) $NodeId
+    if($null -eq $binding){ throw "VTP2_SESSION_NOT_BOUND" }
+    $sealedBytes = $null
+    try { $sealedBytes = [Convert]::FromBase64String([string]$envelope.payload_vtp2_b64) } catch { throw "PAYLOAD_NOT_BASE64" }
+    $sealedObj = CC-ParseJson ((CC-Utf8NoBom).GetString($sealedBytes))
+    if([string]$sealedObj.session_id -cne [string]$binding.vtp2_session_id -or [string]$sealedObj.recipient_device_id -cne [string]$binding.recipient_device_id -or [string]$sealedObj.sender_device_id -cne [string]$binding.sender_device_id){ throw "VTP2_SESSION_MISMATCH" }
+    $tmpDir = Join-Path $RepoRoot "runtime\tmp"; CC-EnsureDir $tmpDir
+    $sealedTmp = Join-Path $tmpDir ("vtp2-in-" + [guid]::NewGuid().ToString("N") + ".json")
+    $plainTmp = Join-Path $tmpDir ("vtp2-out-" + [guid]::NewGuid().ToString("N") + ".bin")
+    try {
+      [System.IO.File]::WriteAllBytes($sealedTmp,$sealedBytes)
+      $dec = CV2-Invoke @("decrypt","--state",(CV2-StatePath $RepoRoot $NodeId),"--in",$sealedTmp,"--out",$plainTmp)
+      if($dec.Code -ne 0){ throw ("VTP2_DECRYPT_FAILED:" + (CV2-Token $dec.Text ("EXIT_" + $dec.Code))) }
+      $payloadBytes = [System.IO.File]::ReadAllBytes($plainTmp)
+    } finally {
+      foreach($t in @($sealedTmp,$plainTmp)){ if(Test-Path -LiteralPath $t){ Remove-Item -LiteralPath $t -Force } }
+    }
+    Write-Host ("COURIER_RECEIVE_DECRYPTED: vtp2 session=" + [string]$binding.vtp2_session_id)
+  }
   $actual = CC-Sha256Bytes $payloadBytes
   if($actual -cne [string]$m.payload_sha256 -or $actual -cne $payloadSha){ throw "PAYLOAD_HASH_MISMATCH" }
   $pd = $envelope.policy_decision

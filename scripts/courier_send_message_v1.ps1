@@ -4,7 +4,8 @@ param(
   [string]$RecipientNodeId = "node-beta",
   [string]$RecipientIdentity = "local/recipient/demo",
   [string]$PayloadText = "hello from covenant courier",
-  [string]$PolicyProfile = "default"
+  [string]$PolicyProfile = "default",
+  [ValidateSet("","human","ai","service")][string]$Origin = ""
 )
 
 # Product send: prepare a covenant_courier.message.v1 and deliver it through the governed
@@ -33,7 +34,8 @@ Run-Child (Join-Path $Scripts "courier_seed_demo_registry_v1.ps1") @("-RepoRoot"
 Run-Child (Join-Path $Scripts "courier_open_session_v1.ps1") @("-RepoRoot",$RepoRoot,"-SessionId",$sessionId,"-SenderNodeId","node-alpha","-RecipientNodeId",$RecipientNodeId,"-NetworkId","courier-internal-net-v1","-SessionRole","message-delivery") | Out-Null
 Run-Child (Join-Path $Scripts "courier_bootstrap_local_trust_v1.ps1") @("-RepoRoot",$RepoRoot) | Out-Null
 
-$prep = Run-Child (Join-Path $Scripts "courier_prepare_message_v1.ps1") @("-RepoRoot",$RepoRoot,"-From",$From,"-To",$RecipientIdentity,"-RecipientNodeId",$RecipientNodeId,"-SessionId",$sessionId,"-PolicyProfile",$PolicyProfile,"-PayloadText",$PayloadText)
+$originArgs = @(); if(-not [string]::IsNullOrWhiteSpace($Origin)){ $originArgs = @("-Origin",$Origin) }
+$prep = Run-Child (Join-Path $Scripts "courier_prepare_message_v1.ps1") (@("-RepoRoot",$RepoRoot,"-From",$From,"-To",$RecipientIdentity,"-RecipientNodeId",$RecipientNodeId,"-SessionId",$sessionId,"-PolicyProfile",$PolicyProfile,"-PayloadText",$PayloadText) + $originArgs)
 $messagePath = $null; $payloadPath = $null
 foreach($line in ($prep.Text -split "`n")){
   if($line -match 'COURIER_PREPARE_MESSAGE_OK:\s+(.+)$'){ $messagePath = $Matches[1].Trim() }

@@ -1,6 +1,6 @@
 param(
   [string]$RepoRoot = ".",
-  # -Full adds the governed-delivery, integration-receipt, trust-import and VTP v2 proofs.
+  # -Full adds the governed-delivery, integration-receipt, trust-import, node-signer and VTP v2 proofs.
   [switch]$Full
 )
 
@@ -60,6 +60,7 @@ if($Full){
   Run-Step -Name "deliver-selftest" -Script (Join-Path $RepoRoot "scripts\_selftest_covenant_courier_deliver_v1.ps1") -ChildArgs @("-RepoRoot",$RepoRoot) -ExpectedToken "COVENANT_COURIER_DELIVER_SELFTEST_OK"
   Run-Step -Name "integration-receipts-selftest" -Script (Join-Path $RepoRoot "scripts\_selftest_constellation_integration_receipts_v1.ps1") -ChildArgs @("-RepoRoot",$RepoRoot) -ExpectedToken "CONSTELLATION_INTEGRATION_RECEIPTS_SELFTEST_OK"
   Run-Step -Name "trust-import-selftest" -Script (Join-Path $RepoRoot "scripts\_selftest_courier_trust_import_v1.ps1") -ChildArgs @("-RepoRoot",$RepoRoot) -ExpectedToken "COURIER_TRUST_IMPORT_SELFTEST_OK"
+  Run-Step -Name "node-signer-selftest" -Script (Join-Path $RepoRoot "scripts\_selftest_courier_node_signer_v1.ps1") -ChildArgs @("-RepoRoot",$RepoRoot) -ExpectedToken "COURIER_NODE_SIGNER_SELFTEST_OK"
   Run-Step -Name "integration-receipts-verify" -Script (Join-Path $RepoRoot "scripts\courier_integration_receipts_v1.ps1") -ChildArgs @("-RepoRoot",$RepoRoot,"verify") -ExpectedToken "COURIER_INTEGRATION_RECEIPTS_VERIFY_OK"
   Run-Step -Name "vtp2-verify" -Script (Join-Path $RepoRoot "vtp2.ps1") -ChildArgs @("verify") -ExpectedToken "VTP2_SELFTEST_OK"
   Write-Host "COVENANT_COURIER_VERIFY_ALL_OK"

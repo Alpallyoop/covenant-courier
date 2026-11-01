@@ -23,8 +23,8 @@ The current product core is local-first and CLI-driven. Runtime/proof state is i
 ## Current status
 
 Product core: governed delivery, verified receive, append-only receipt chain, Constellation
-integration receipts, Covenant Gate adapter, NeverLost trust import. VTP v1 substrate and the VTP v2
-secure core are green. Facts and limits: `docs/canonical/CURRENT_STATE.md`.
+integration receipts, Covenant Gate adapter, NeverLost trust import, payload encryption over VTP v2
+sessions for profiles that require it. VTP v1 substrate and the VTP v2 secure core are green. Facts and limits: `docs/canonical/CURRENT_STATE.md`.
 
 Primary product proof:
 
@@ -33,7 +33,7 @@ Primary product proof:
 
 `verify` = schema test, prepare, send, receive (positive and negative), receipts, receipt chain and the
 VTP substrate (`.\vtp.ps1 verify` -> `VTP_VERIFY_ALL_OK`). `verify-all` adds the governed-delivery
-self-test (29 cases; 30 with a Covenant Gate checkout), the integration-receipt self-test (14), the NeverLost trust-import self-test (7),
+self-test (34 cases; 37 with a Covenant Gate checkout; the VTP v2 cases need the .NET 10 SDK), the integration-receipt self-test (14), the NeverLost trust-import self-test (7), the node-signer self-test (6),
 a verification of every integration receipt on disk, and the VTP v2 self-test (`.\vtp2.ps1 verify`,
 needs the .NET 10 SDK).
 
@@ -43,16 +43,19 @@ needs the .NET 10 SDK).
 
     .\courier.ps1 help
     .\courier.ps1 schema-test
-    .\courier.ps1 prepare  [-PayloadText ..] [-PolicyProfile default|public|confidential]
-    .\courier.ps1 send     [-PayloadText ..] [-PolicyProfile ..]      prepare + deliver (demo nodes)
+    .\courier.ps1 prepare  [-PayloadText ..] [-PolicyProfile default|public|confidential] [-Origin human|ai|service]
+    .\courier.ps1 send     [-PayloadText ..] [-PolicyProfile ..] [-Origin ..]   prepare + deliver (demo nodes)
     .\courier.ps1 deliver  -MessagePath <message.json> -PayloadPath <file> [-OutDir <dir>]
                            [-CovenantGateRoot <dir> | -CovenantGateDecisionPath <eval_output.json>]
+    .\courier.ps1 secure-session -SessionId <id> -LocalPair
+    .\courier.ps1 secure-session -SessionId <id> -Vtp2SessionId <hex> -SenderFingerprint <hex> -RecipientFingerprint <hex>
     .\courier.ps1 receive
     .\courier.ps1 receive-negative
     .\courier.ps1 receipts
     .\courier.ps1 receipt-chain
     .\courier.ps1 trust-import -TrustBundlePath <file> -ExpectedSha256 <sha> [-NeverLostRoot <dir>]
     .\courier.ps1 integration-receipts [-Action verify|list|nfl-inboxes]
+    .\courier.ps1 node-signer -Action keygen|adopt|status -NodeId <node> [-Principal ..]   NeverLost-issued node key
     .\courier.ps1 verify
     .\courier.ps1 verify-all
 
@@ -74,12 +77,17 @@ The full caller contract is in `docs/integrations/README.md`.
       optional Covenant Gate decision (off | advisory | required per profile)
       write covenant_courier.policy_decision.v1 and covenant_courier.notification.v1
       allowed  -> sign covenant_courier.delivery.v1 (message + decision + notification + payload)
-                  and send it as a VTP frame to the recipient node
+                  and send it as a VTP frame to the recipient node; a profile with
+                  payload_encryption "vtp2" carries the payload only as a vtp.message.v2 envelope
+                  under the session's bound VTP v2 session (no binding -> quarantined,
+                  REQUIRE_STRONGER_SESSION:VTP2_SESSION_NOT_BOUND)
       refused  -> reject, or quarantine under runtime/product_messages/quarantine/
       product receipt for every outcome, appended and chained
     receive:
       recipient node policy loop, listener signature + frame hash check
       envelope bound to the sender's receipt (message ID, payload hash, node, session, decision)
+      sealed payload decrypted with the recipient node's VTP v2 state; a plaintext envelope on a
+      session bound to VTP v2 is refused (VTP2_DOWNGRADE_REFUSED)
       release to runtime/product_messages/inbox/<node>/<message_id>/, accepted or rejected receipt
 
 ## Receipts
@@ -106,6 +114,8 @@ The proofs directory is intentionally ignored by git.
     schemas\covenant_courier.delivery.v1.json
     schemas\covenant_courier.product_policy.v1.json
     schemas\covenant_courier.product_receipt_chain.v1.json
+    schemas\covenant_courier.vtp2_binding.v1.json            Courier session <-> VTP v2 session
+    schemas\covenant_courier.settings.v1.json                host settings (Global Workbench plugin)
 
 Delivery policy: `policy\courier_product_policy_v1.json`. Schema test: `.\courier.ps1 schema-test`.
 
@@ -117,10 +127,10 @@ Covenant Courier is the `covenant-courier` service (family `covenant`, layer
 | Edge | Courier's side |
 |---|---|
 | Rebound -> Courier (registered) | `courier.ps1 deliver` contract; Rebound carries SHA-256 of `product_receipt.json` |
-| Courier -> Covenant Gate (proposed) | invoke Covenant Gate's sealed evaluator or verify a signed decision; integration receipt per consultation |
-| Courier -> NeverLost (proposed) | `trust-import` of a pinned trust bundle; integration receipt per import |
+| Courier -> Covenant Gate (emitting) | invoke Covenant Gate's sealed evaluator or verify a signed decision; integration receipt per consultation |
+| Courier -> NeverLost (emitting) | `trust-import` of a pinned trust bundle; integration receipt per import |
 | NFL (witness) | reads `proofs/integration_receipts/*` as receipt-mode inboxes |
-| Global Workbench (proposed) | draft plugin manifest |
+| Global Workbench (planned) | plugin manifest (workbench PR) and `covenant_courier.settings.v1` |
 
 Details: `docs/integrations/README.md`. Proposed registry changes and what Courier needs from each
 service: `docs/proposals/0001-covenant-courier-ownership-and-integrations.md`.
@@ -171,10 +181,10 @@ for defense or classified deployment.
 
 Known remaining work:
 
-    product delivery over VTP v2 sessions (today: signed, hash-bound frames without payload encryption)
-    in-session DH ratchet for VTP v2
+    in-session DH ratchet for VTP v2 (post-compromise recovery needs a new session)
+    profiles other than "confidential" still send signed, hash-bound frames without payload encryption
     fixed binary wire header
-    signers issued by NeverLost instead of local bootstrap keys
+    NeverLost issuing the Courier node principals (Courier side done: courier.ps1 node-signer)
     service mode only if explicit
     UI through Global Workbench
     public release package for the current product core (v0.1.5 predates governed delivery)

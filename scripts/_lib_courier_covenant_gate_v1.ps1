@@ -31,7 +31,9 @@ function CCG-BuildEvalInput($Message,[string]$PayloadSha256,[string]$SenderPrinc
     schema = "covenantgate.eval_input.v1"
     enforcement_point = "eval.request"
     subject = [ordered]@{ type = "courier_sender"; principal = $SenderPrincipal; node_id = [string]$Message.sender_node_id; claimed_identity = [string]$Message.sender_identity }
-    action = [ordered]@{ type = "courier.deliver" }
+    # origin comes from the message (human | ai | service); absent = "unspecified", which no
+    # Covenant Gate allow rule names, so it stays default-deny.
+    action = [ordered]@{ type = "courier.deliver"; origin = $(if((CC-HasProp $Message "origin") -and -not [string]::IsNullOrWhiteSpace([string]$Message.origin)){ [string]$Message.origin } else { "unspecified" }) }
     execution_surface = "covenant-courier"
     resource = [ordered]@{
       domain = "courier.message"
