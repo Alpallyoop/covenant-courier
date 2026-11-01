@@ -33,7 +33,7 @@ Primary product proof:
 
 `verify` = schema test, prepare, send, receive (positive and negative), receipts, receipt chain and the
 VTP substrate (`.\vtp.ps1 verify` -> `VTP_VERIFY_ALL_OK`). `verify-all` adds the governed-delivery
-self-test (34 cases; 37 with a Covenant Gate checkout; the VTP v2 cases need the .NET 10 SDK), the integration-receipt self-test (14), the NeverLost trust-import self-test (7), the node-signer self-test (6),
+self-test (37 cases; 40 with a Covenant Gate checkout; the VTP v2 cases need the .NET 10 SDK), the integration-receipt self-test (14), the NeverLost trust-import self-test (7), the node-signer self-test (6),
 a verification of every integration receipt on disk, and the VTP v2 self-test (`.\vtp2.ps1 verify`,
 needs the .NET 10 SDK).
 

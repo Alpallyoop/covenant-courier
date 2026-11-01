@@ -28,6 +28,11 @@ jobs:
       DOTNET_NOLOGO: "1"
       POWERSHELL_TELEMETRY_OPTOUT: "1"
     steps:
+      # Byte-exact fixtures (allowed_signers, pinned hashes, receipts): no CRLF conversion on checkout.
+      - name: Keep LF line endings
+        shell: pwsh
+        run: git config --global core.autocrlf false
+
       - uses: actions/checkout@v4
 
       - uses: actions/setup-dotnet@v4
@@ -38,8 +43,11 @@ jobs:
         shell: pwsh
         run: |
           dotnet --version
-          & "$env:WINDIR\System32\OpenSSH\ssh-keygen.exe" -V 2>&1 | Select-Object -First 1
+          # ssh-keygen has no version flag; the OpenSSH client next to it reports the version.
+          Get-Command "$env:WINDIR\System32\OpenSSH\ssh-keygen.exe" | Select-Object -ExpandProperty Source
+          & "$env:WINDIR\System32\OpenSSH\ssh.exe" -V 2>&1 | Out-String
           $PSVersionTable.PSVersion.ToString()
+          exit 0
 
       - name: courier.ps1 verify-all
         shell: ${{ matrix.shell }}

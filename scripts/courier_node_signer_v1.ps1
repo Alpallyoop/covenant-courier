@@ -28,7 +28,7 @@ $RepoRoot = (Resolve-Path $RepoRoot).Path
 if($NodeId -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,71}\z' -or $NodeId.Contains("..")){ Fail "BAD_NODE_ID" }
 if([string]::IsNullOrWhiteSpace($Principal)){ $Principal = "single-tenant/device_agent/courier/" + $NodeId }
 # Same principal rules as the NeverLost trust import (no allowed_signers pattern characters).
-if($Principal -cnotmatch '^single-tenant/device_agent/.+\z' -or $Principal -match '[\s",*?!]'){ Fail "BAD_PRINCIPAL" }
+if($Principal -cnotmatch '^single-tenant/device_agent/.+\z' -or $Principal -match '[\s",*?!\\]'){ Fail "BAD_PRINCIPAL" }
 
 $nodePath = Join-Path $RepoRoot ("registry\nodes\" + $NodeId + ".json")
 $safe = ($Principal -replace '[^A-Za-z0-9._-]','_')

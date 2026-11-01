@@ -67,7 +67,11 @@ receipt before releasing anything. By default the envelope is not encrypted: on 
 transport the payload is readable by anyone who can read the node folders. A profile with
 `payload_encryption: vtp2` (the shipped `confidential` profile) sends the payload only as a VTP v2
 `vtp.message.v2` under the session bound with `courier.ps1 secure-session`; with no binding nothing is
-sent (quarantined), and the receiver refuses a plaintext envelope on a bound session (downgrade). The
+sent (quarantined); a bound session always carries the payload encrypted, and the receiver refuses a
+plaintext envelope on a bound session or for a profile its own policy marks vtp2 (downgrade). A sealed
+envelope does not carry the sender's free-text preview. Not covered: a process killed mid-delivery can
+leave a plaintext temp file under `runtime/tmp`; VTP v2 commits replay state on decrypt, so a receive that
+crashes after decrypt cannot be retried for that message. The
 fingerprints in the binding must be verified out of band when the nodes are on different machines
 (`-LocalPair` reads both from local state). The message `origin` is asserted by the sender (covered by
 its signature), not authenticated by Covenant Gate. Released inbox payloads are plaintext on disk.

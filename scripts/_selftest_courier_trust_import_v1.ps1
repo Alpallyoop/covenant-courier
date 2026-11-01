@@ -20,7 +20,8 @@ $Import = Join-Path $PSScriptRoot "courier_trust_import_neverlost_v1.ps1"
 $Verify = Join-Path $PSScriptRoot "courier_verify_signature_v1.ps1"
 $Cases = 0
 function Must([bool]$c,[string]$code){ if(-not $c){ throw ("COURIER_TRUST_IMPORT_SELFTEST_FAIL:" + $code) } }
-function Child([string]$Script,[string[]]$A){ $o = & $PS -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Script @A 2>&1; return @{ Code = $LASTEXITCODE; Text = ($o | Out-String) } }
+# Continue around the child: Windows PowerShell 5.1 turns redirected child stderr into a terminating error under Stop.
+function Child([string]$Script,[string[]]$A){ $prev = $ErrorActionPreference; $ErrorActionPreference = "Continue"; try { $o = & $PS -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Script @A 2>&1; $c = $LASTEXITCODE } finally { $ErrorActionPreference = $prev }; return @{ Code = $c; Text = ($o | Out-String) } }
 
 $keygen = (Get-Command ssh-keygen -ErrorAction Stop).Source
 if($env:WINDIR -and (Test-Path -LiteralPath (Join-Path $env:WINDIR "System32\OpenSSH\ssh-keygen.exe"))){ $keygen = Join-Path $env:WINDIR "System32\OpenSSH\ssh-keygen.exe" }

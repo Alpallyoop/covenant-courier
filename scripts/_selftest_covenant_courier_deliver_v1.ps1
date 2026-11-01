@@ -23,8 +23,10 @@ $Sandbox = Join-Path $Run "repo"
 $Cases = 0
 
 function Child([string]$Script,[string[]]$A){
-  $out = & $PS -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Script @A 2>&1
-  return @{ Code = $LASTEXITCODE; Text = ($out | Out-String) }
+  # Continue: Windows PowerShell 5.1 turns redirected child stderr into a terminating error under Stop.
+  $prev = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+  try { $out = & $PS -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Script @A 2>&1; $code = $LASTEXITCODE } finally { $ErrorActionPreference = $prev }
+  return @{ Code = $code; Text = ($out | Out-String) }
 }
 function Must([bool]$Cond,[string]$Code){ if(-not $Cond){ throw ("COVENANT_COURIER_DELIVER_SELFTEST_FAIL:" + $Code) } }
 
@@ -73,7 +75,9 @@ function New-Case([string]$Profile,[string]$Text,[hashtable]$Override = @{},[str
 
 function Deliver($Case,[string[]]$Extra = @(),[string]$Root = $Sandbox){
   $out = Join-Path $Case.Dir "out"
-  $a = @("-RepoRoot",$Root,"-MessagePath",$Case.Message,"-PayloadPath",$Case.Payload,"-OutDir",$out,"-PolicyPath",$TestPolicy) + $Extra
+  $a = @("-RepoRoot",$Root,"-MessagePath",$Case.Message,"-PayloadPath",$Case.Payload,"-OutDir",$out)
+  if(@($Extra) -notcontains "-PolicyPath"){ $a += @("-PolicyPath",$TestPolicy) }
+  $a += $Extra
   $res = Child $Deliver $a
   $receipt = $null
   $rp = Join-Path $out "product_receipt.json"
@@ -254,6 +258,14 @@ $envText = [IO.File]::ReadAllText((Join-Path $res.Out "delivery.json"))
 $envObj = CC-ParseJson $envText
 Must ((CC-HasProp $envObj "payload_vtp2_b64") -and -not (CC-HasProp $envObj "payload_b64")) "VTP2_ENVELOPE_FORM"
 Must (-not $envText.Contains("sealed payload bravo") -and -not $envText.Contains([Convert]::ToBase64String((CC-Utf8NoBom).GetBytes("sealed payload bravo")))) "VTP2_NO_PLAINTEXT_IN_ENVELOPE"
+Must ([string]$envObj.message.notification_preview -ceq "") "VTP2_NO_PREVIEW_IN_ENVELOPE"
+$c = New-Case "default" "default profile on a bound session"
+$res = Deliver $c
+Expect $res 0 "sent" "POLICY_ALLOW" "bound-session-default-profile-encrypted"
+$envObj = CC-ReadJsonFile (Join-Path $res.Out "delivery.json")
+Must ((CC-HasProp $envObj "payload_vtp2_b64") -and -not (CC-HasProp $envObj "payload_b64")) "BOUND_SESSION_ALWAYS_SEALED"
+$c = New-Case "sealed" ("a" * 600001)
+Expect (Deliver $c) 42 "rejected" "PAYLOAD_TOO_LARGE" "vtp2-payload-over-envelope-limit"
 $c = New-Case "sealed" "x"
 $bp = Join-Path $Sandbox "registry\vtp2_bindings\session-alpha-beta-001.json"
 $saved = [IO.File]::ReadAllText($bp)
@@ -312,12 +324,31 @@ $sid = "session-alpha-beta-sealed"
 $r = Child (Join-Path $PSScriptRoot "courier_seed_demo_registry_v1.ps1") @("-RepoRoot",$RepoRoot); Must ($r.Code -eq 0) "REAL_SEED"
 $r = Child (Join-Path $PSScriptRoot "courier_open_session_v1.ps1") @("-RepoRoot",$RepoRoot,"-SessionId",$sid,"-SenderNodeId","node-alpha","-RecipientNodeId","node-beta","-NetworkId","courier-internal-net-v1","-SessionRole","message-delivery"); Must ($r.Code -eq 0) "REAL_OPEN_SEALED"
 $r = Child (Join-Path $PSScriptRoot "courier_secure_session_v1.ps1") @("-RepoRoot",$RepoRoot,"-SessionId",$sid,"-LocalPair"); Must ($r.Code -eq 0) ("REAL_SECURE_SESSION:" + $r.Text)
+# Downgrade 1: a plaintext envelope sent before the session was bound, received after it was.
+$bpReal = Join-Path $RepoRoot ("registry\vtp2_bindings\" + $sid + ".json")
+$savedBinding = [IO.File]::ReadAllText($bpReal); Remove-Item -LiteralPath $bpReal -Force
 $c = New-Case "default" "downgrade attempt" @{ session_id = $sid }
 $res = Deliver $c @() $RepoRoot
-Must ($res.Code -eq 0) ("REAL_PLAIN_ON_SEALED_SEND:" + $res.Text)
+[IO.File]::WriteAllText($bpReal,$savedBinding)
+Must ($res.Code -eq 0) ("REAL_PLAIN_BEFORE_BINDING_SEND:" + $res.Text)
 $r = Child (Join-Path $RepoRoot "courier.ps1") @("receive","-RepoRoot",$RepoRoot)
 Must ($r.Code -ne 0 -and $r.Text -match "VTP2_DOWNGRADE_REFUSED") ("DOWNGRADE_NOT_REFUSED:" + $r.Text)
 $Cases++; Write-Host "COVENANT_COURIER_DELIVER_CASE_OK: plaintext-on-vtp2-session -> rejected:VTP2_DOWNGRADE_REFUSED"
+# Downgrade 2: plaintext for a profile the receiver's own policy requires sealed (the self-test
+# sender's policy has confidential = none; the real policy has confidential = vtp2), unbound session.
+$sidConf = "session-alpha-beta-conf"
+$r = Child (Join-Path $PSScriptRoot "courier_open_session_v1.ps1") @("-RepoRoot",$RepoRoot,"-SessionId",$sidConf,"-SenderNodeId","node-alpha","-RecipientNodeId","node-beta","-NetworkId","courier-internal-net-v1","-SessionRole","message-delivery"); Must ($r.Code -eq 0) "REAL_OPEN_CONF"
+# This sender's policy: confidential without encryption and without the gate (the gate is tested above).
+$polPlain = CC-ReadJsonFile $TestPolicy
+$polPlain.profiles.confidential.covenant_gate = "off"
+$TestPolicyPlainConf = Join-Path $Run "policy.plain-confidential.json"
+[void](CC-WriteDocument $TestPolicyPlainConf (CC-ToOrderedTree $polPlain))
+$c = New-Case "confidential" "confidential in plaintext" @{ session_id = $sidConf }
+$res = Deliver $c @("-PolicyPath",$TestPolicyPlainConf) $RepoRoot
+Must ($res.Code -eq 0) ("REAL_CONFIDENTIAL_PLAIN_SEND:" + $res.Text)
+$r = Child (Join-Path $RepoRoot "courier.ps1") @("receive","-RepoRoot",$RepoRoot)
+Must ($r.Code -ne 0 -and $r.Text -match "VTP2_DOWNGRADE_REFUSED") ("PROFILE_DOWNGRADE_NOT_REFUSED:" + $r.Text)
+$Cases++; Write-Host "COVENANT_COURIER_DELIVER_CASE_OK: plaintext-for-vtp2-profile -> rejected:VTP2_DOWNGRADE_REFUSED"
 $c = New-Case "sealed" "end to end sealed payload" @{ session_id = $sid }
 $res = Deliver $c @() $RepoRoot
 Must ($res.Code -eq 0) ("REAL_SEALED_SEND:" + $res.Text)

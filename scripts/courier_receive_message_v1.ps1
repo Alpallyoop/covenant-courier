@@ -146,8 +146,18 @@ try {
   if([string]$m.recipient_node_id -cne $NodeId){ throw "RECIPIENT_NODE_MISMATCH" }
   if([string]$m.sender_node_id -cne [string]$frame.sender_node_id -or [string]$m.session_id -cne [string]$frame.session_id){ throw "FRAME_BINDING_MISMATCH" }
   if($hasPlain){
-    # A session bound to VTP v2 never accepts a plaintext payload (no silent downgrade).
+    # A session bound to VTP v2 never accepts a plaintext payload (no silent downgrade), and neither
+    # does a profile this receiver's own policy marks payload_encryption vtp2 (bound or not).
     if($null -ne (CV2-ReadBinding $RepoRoot ([string]$m.session_id) ([string]$m.sender_node_id) $NodeId)){ throw "VTP2_DOWNGRADE_REFUSED" }
+    $rpPath = Join-Path $RepoRoot "policy\courier_product_policy_v1.json"
+    if(Test-Path -LiteralPath $rpPath -PathType Leaf){
+      $rp = CC-ReadJsonFile $rpPath
+      $pn = [string]$m.policy_profile
+      if((CC-HasProp $rp "profiles") -and (CC-HasProp $rp.profiles $pn)){
+        $rprof = $rp.profiles.$pn
+        if((CC-HasProp $rprof "payload_encryption") -and [string]$rprof.payload_encryption -ceq "vtp2"){ throw "VTP2_DOWNGRADE_REFUSED" }
+      }
+    }
     try { $payloadBytes = [Convert]::FromBase64String([string]$envelope.payload_b64) } catch { throw "PAYLOAD_NOT_BASE64" }
   } else {
     $binding = CV2-ReadBinding $RepoRoot ([string]$m.session_id) ([string]$m.sender_node_id) $NodeId

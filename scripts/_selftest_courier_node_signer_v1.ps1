@@ -20,7 +20,8 @@ CC-EnsureDir $Sandbox; CC-EnsureDir (Join-Path $NL "proofs\keys")
 $Signer = Join-Path $PSScriptRoot "courier_node_signer_v1.ps1"
 $Cases = 0
 function Must([bool]$c,[string]$code){ if(-not $c){ throw ("COURIER_NODE_SIGNER_SELFTEST_FAIL:" + $code) } }
-function Child([string]$Script,[string[]]$A){ $o = & $PS -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Script @A 2>&1; return @{ Code = $LASTEXITCODE; Text = ($o | Out-String) } }
+# Continue around the child: Windows PowerShell 5.1 turns redirected child stderr into a terminating error under Stop.
+function Child([string]$Script,[string[]]$A){ $prev = $ErrorActionPreference; $ErrorActionPreference = "Continue"; try { $o = & $PS -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Script @A 2>&1; $c = $LASTEXITCODE } finally { $ErrorActionPreference = $prev }; return @{ Code = $c; Text = ($o | Out-String) } }
 function S([string]$Name){ return (Join-Path $PSScriptRoot $Name) }
 function Bundle([string]$Path,[string]$Principal,[string]$PubPath){
   $pub = ([IO.File]::ReadAllText($PubPath)).Trim()

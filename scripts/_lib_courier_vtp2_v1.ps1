@@ -24,8 +24,12 @@ function CV2-BindingPath([string]$RepoRoot,[string]$SessionId){
 function CV2-Invoke([string[]]$VtpArgs){
   $vtp2 = Join-Path (Split-Path -Parent $PSScriptRoot) "vtp2.ps1"
   if(-not (Test-Path -LiteralPath $vtp2 -PathType Leaf)){ return [pscustomobject]@{ Code = 127; Text = "VTP2_CLI_MISSING" } }
-  $out = & (CC-HostExe) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $vtp2 @VtpArgs 2>&1
-  return [pscustomobject]@{ Code = $LASTEXITCODE; Text = ($out | Out-String) }
+  # Continue: under Stop, Windows PowerShell 5.1 turns the child's stderr (VTP v2 writes its failure
+  # token there) into a terminating error, so the token and exit code would be lost.
+  $prevEap = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+  try { $out = & (CC-HostExe) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $vtp2 @VtpArgs 2>&1; $code = $LASTEXITCODE }
+  finally { $ErrorActionPreference = $prevEap }
+  return [pscustomobject]@{ Code = $code; Text = ($out | Out-String) }
 }
 
 function CV2-Token([string]$Text,[string]$Fallback){

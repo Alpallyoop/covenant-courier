@@ -62,7 +62,11 @@ Payload encryption (profile `payload_encryption`: `none` default, `vtp2`; any ot
 -RecipientFingerprint` after pairing two machines with `vtp2.ps1`; the binding is
 `registry/vtp2_bindings/<session>.json`, `covenant_courier.vtp2_binding.v1`). The envelope then carries
 `payload_vtp2_b64` (a `vtp.message.v2` under that session) instead of `payload_b64`; `payload_sha256`
-still covers the plaintext. Unbound: `quarantined`, exit 42. The shipped `confidential` profile requires
+still covers the plaintext. Unbound: `quarantined`, exit 42. A session that has a binding always carries
+the payload encrypted, whatever the profile. Encrypted payloads are limited to 600,000 bytes
+(`PAYLOAD_TOO_LARGE`; the payload is base64-encoded twice inside the envelope), and the envelope's copy of
+the message carries an empty `notification_preview` (the sender's free text is not encrypted, so it is not
+sent; the recipient sees the notification document). The shipped `confidential` profile requires
 `vtp2`. VTP v2 needs the .NET 10 SDK and protects device state with DPAPI on Windows or
 `VTP2_STATE_KEY_FILE` elsewhere.
 
@@ -71,7 +75,8 @@ against the sender's receipt (message ID, payload hash, recipient node, frame bi
 policy decision) and only then writes `runtime/product_messages/inbox/<node>/<message_id>/`
 (`payload.bin`, `message.json`, `policy_decision.json`, `notification.json`). A sealed payload is
 decrypted with the recipient node's VTP v2 state first (`COURIER_RECEIVE_DECRYPTED`); a plaintext
-envelope on a session bound to VTP v2 is refused (`VTP2_DOWNGRADE_REFUSED`), as is a sealed one whose
+envelope on a session bound to VTP v2, or for a profile the receiver's own policy marks
+`payload_encryption: vtp2`, is refused (`VTP2_DOWNGRADE_REFUSED`), as is a sealed one whose
 binding does not match (`VTP2_SESSION_MISMATCH`). A transport rejection or
 an invalid envelope writes a `rejected` product receipt (`event_type
 covenant_courier.product.receive_reject.v1`).

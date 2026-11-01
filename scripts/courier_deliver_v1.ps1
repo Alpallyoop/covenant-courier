@@ -227,13 +227,18 @@ if($null -eq $profile){
 
 if($decision -eq "redact_notification"){ $displayMode = "redacted" }
 
-# Payload encryption the profile requires: a VTP v2 session bound to this Courier session. Without
-# one nothing is sent (the message waits in quarantine as require_stronger_session).
+# Payload encryption. A session bound to a VTP v2 session always carries the payload encrypted,
+# whatever the profile (its receiver refuses plaintext). A profile that requires vtp2 sends nothing
+# without a binding (the message waits in quarantine as require_stronger_session).
 $vtp2Binding = $null
-if(@("allow","redact_notification") -contains $decision -and $null -ne $profile -and $encryption -eq "vtp2"){
+# The payload is base64-encoded inside the VTP v2 envelope and again in the delivery envelope; above
+# this size the delivery envelope would exceed what a receiver reads (1,200,000 bytes).
+$Vtp2MaxPayloadBytes = 600000
+if(@("allow","redact_notification") -contains $decision -and $null -ne $profile){
   try { $vtp2Binding = CV2-ReadBinding $RepoRoot ([string]$message.session_id) ([string]$message.sender_node_id) ([string]$message.recipient_node_id) }
   catch { $vtp2Binding = $null; Decide "reject" ("VTP2_BINDING_INVALID:" + ([string]$_.Exception.Message -replace '[^A-Za-z0-9_:]','_')) }
-  if($null -eq $vtp2Binding -and @("allow","redact_notification") -contains $decision){ Decide "require_stronger_session" "VTP2_SESSION_NOT_BOUND" }
+  if($null -eq $vtp2Binding -and $encryption -eq "vtp2" -and @("allow","redact_notification") -contains $decision){ Decide "require_stronger_session" "VTP2_SESSION_NOT_BOUND" }
+  if($null -ne $vtp2Binding -and $payloadBytes.Length -gt $Vtp2MaxPayloadBytes){ $vtp2Binding = $null; Decide "reject" "PAYLOAD_TOO_LARGE" }
 }
 
 $decisionDoc = [ordered]@{
@@ -286,6 +291,9 @@ try {
     notification = $notification
   }
   if($null -ne $vtp2Binding){
+    # The sender's free-text preview is not part of the encrypted payload: it is not carried at all
+    # (the recipient sees the notification document, built from the profile's display mode).
+    $envelope.message["notification_preview"] = ""
     # Encrypt exactly the bytes that were hashed and checked by policy (no re-read of the input).
     $tmpDir = Join-Path $RepoRoot "runtime\tmp"; CC-EnsureDir $tmpDir
     $plainTmp = Join-Path $tmpDir ("vtp2-plain-" + [guid]::NewGuid().ToString("N") + ".bin")

@@ -8,7 +8,9 @@
   `vtp2`; the `confidential` profile now requires `vtp2`). The envelope carries `payload_vtp2_b64` (a
   `vtp.message.v2`) instead of `payload_b64`; with no VTP v2 binding the delivery is quarantined
   (`REQUIRE_STRONGER_SESSION:VTP2_SESSION_NOT_BOUND`). Receive decrypts with the recipient node's state and
-  refuses a plaintext envelope on a bound session (`VTP2_DOWNGRADE_REFUSED`).
+  refuses a plaintext envelope on a bound session or for a profile its own policy marks vtp2
+  (`VTP2_DOWNGRADE_REFUSED`). A bound session always carries the payload encrypted; encrypted payloads are
+  limited to 600,000 bytes; the sender's free-text preview is not carried in a sealed envelope.
 - `courier.ps1 secure-session` (`scripts/courier_secure_session_v1.ps1`) binds a Courier session to a VTP v2
   session (`registry/vtp2_bindings/<session>.json`, schema `covenant_courier.vtp2_binding.v1`): `-LocalPair`
   for both nodes on one machine, or an existing two-machine VTP v2 session with its fingerprints.
