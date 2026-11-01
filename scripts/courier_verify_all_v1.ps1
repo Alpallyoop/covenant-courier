@@ -30,7 +30,7 @@ function Run-Step {
   Write-Host ("COVENANT_COURIER_VERIFY_STEP_START: " + $Name)
 
   $ps = ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
-  $out = & $ps -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Script @ChildArgs 2>&1
+  $eapPrev = $ErrorActionPreference; $ErrorActionPreference = "Continue"; $out = & $ps -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Script @ChildArgs 2>&1; $ErrorActionPreference = $eapPrev
   $code = $LASTEXITCODE
   $text = ($out | Out-String)
 

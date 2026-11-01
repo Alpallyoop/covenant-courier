@@ -206,3 +206,18 @@ function CC-RequireExactProps($Obj,[string[]]$Required,[string[]]$Optional,[stri
 }
 
 function CC-HostExe(){ return ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) }
+
+# A copied private key inherits its folder's permissions; OpenSSH refuses a key others can read
+# ("UNPROTECTED PRIVATE KEY FILE"). Restrict it to the current user (Windows ACL, or mode 0600).
+function CC-RestrictPrivateKey([string]$Path){
+  if($env:OS -eq "Windows_NT"){
+    $acl = New-Object System.Security.AccessControl.FileSecurity
+    $acl.SetAccessRuleProtection($true,$false)
+    $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    $acl.SetOwner($me)
+    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($me,"FullControl","Allow")))
+    Set-Acl -LiteralPath $Path -AclObject $acl
+  } else {
+    & chmod 600 $Path
+  }
+}

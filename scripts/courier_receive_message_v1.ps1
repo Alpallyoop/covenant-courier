@@ -30,7 +30,7 @@ if(-not (Test-Path -LiteralPath $Vtp -PathType Leaf)){ throw "COURIER_RECEIVE_FA
 if(-not (Test-Path -LiteralPath $ProductReceipt -PathType Leaf)){ throw "COURIER_RECEIVE_FAIL:MISSING_PRODUCT_RECEIPTS" }
 
 function Run-Child([string]$Script,[string[]]$ChildArgs){
-  $out = & (CC-HostExe) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Script @ChildArgs 2>&1
+  $eapPrev = $ErrorActionPreference; $ErrorActionPreference = "Continue"; $out = & (CC-HostExe) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Script @ChildArgs 2>&1; $ErrorActionPreference = $eapPrev
   $code = $LASTEXITCODE
   $text = ($out | Out-String)
   Write-Host $text.Trim()

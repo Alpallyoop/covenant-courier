@@ -53,7 +53,7 @@ function Write-ProductReceipt([string]$MessageId,[string]$FrameId,[string]$Paylo
   $line = CC-ToJson $receipt
   CC-WriteTextFile (Join-Path $script:Out "product_receipt.json") $line
   CC-AppendLine $ReceiptLog $line
-  $chain = & (CC-HostExe) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "courier_receipt_chain_v1.ps1") -RepoRoot $RepoRoot 2>&1
+  $eapPrev = $ErrorActionPreference; $ErrorActionPreference = "Continue"; $chain = & (CC-HostExe) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "courier_receipt_chain_v1.ps1") -RepoRoot $RepoRoot 2>&1; $ErrorActionPreference = $eapPrev
   if($LASTEXITCODE -ne 0){ Write-Host ($chain | Out-String).Trim(); Write-Host "COVENANT_COURIER_DELIVER_RECEIPT_CHAIN_FAILED"; Write-Host "COVENANT_COURIER_DELIVER_FAILED"; exit 1 }
   $sha = CC-Sha256Text $line
   Write-Host ("COVENANT_COURIER_DELIVER_RECEIPT: " + (Join-Path $script:Out "product_receipt.json"))
@@ -316,14 +316,16 @@ try {
   $safe = ($senderPrincipal -replace '[^A-Za-z0-9._-]','_')
   if(-not (Test-Path -LiteralPath (Join-Path $RepoRoot ("proofs\keys\courier_" + $safe + "_ed25519")) -PathType Leaf)){ throw ("SIGNER_KEY_MISSING:" + $senderPrincipal) }
 
-  $sign = & (CC-HostExe) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "courier_sign_message_v1.ps1") -RepoRoot $RepoRoot -MessagePath $deliveryPath -SignerIdentity $senderPrincipal -Namespace "courier/message" 2>&1
+  $eapPrev = $ErrorActionPreference; $ErrorActionPreference = "Continue"; $sign = & (CC-HostExe) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "courier_sign_message_v1.ps1") -RepoRoot $RepoRoot -MessagePath $deliveryPath -SignerIdentity $senderPrincipal -Namespace "courier/message" 2>&1; $ErrorActionPreference = $eapPrev
   if($LASTEXITCODE -ne 0){ Write-Host ($sign | Out-String).Trim(); throw "SIGN_FAILED" }
 
   $drop = Join-Path $RepoRoot ("runtime\nodes\" + [string]$message.recipient_node_id + "\inbox\drop")
+  $eapPrev = $ErrorActionPreference; $ErrorActionPreference = "Continue"
   $send = & (CC-HostExe) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "courier_transport_send_v1.ps1") `
     -RepoRoot $RepoRoot -MessagePath $deliveryPath -SenderIdentity $senderPrincipal -RecipientIdentity $recipientPrincipal `
     -SenderNodeId ([string]$message.sender_node_id) -RecipientNodeId ([string]$message.recipient_node_id) -NetworkId ([string]$session.network_id) `
     -SessionId ([string]$message.session_id) -SenderRole ([string]$session.session_role) -DropRoot $drop 2>&1
+  $ErrorActionPreference = $eapPrev
   $sendText = ($send | Out-String)
   if($LASTEXITCODE -ne 0){ Write-Host $sendText.Trim(); throw "TRANSPORT_SEND_FAILED" }
   $frameId = $null

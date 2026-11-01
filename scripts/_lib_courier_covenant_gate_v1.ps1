@@ -77,7 +77,7 @@ function CCG-Invoke([string]$RepoRoot,[string]$CovenantGateRoot,[string]$EvalInp
     return @{ Ok = $false; Token = "COVENANT_GATE_EVALUATOR_MISSING"; OutputPath = $null }
   }
   $runner = Join-Path $PSScriptRoot "courier_covenant_gate_invoke_v1.ps1"
-  $log = & (CC-HostExe) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $runner -CovenantGateRoot $CovenantGateRoot -EvalInputPath $EvalInputPath -OutPath $OutPath 2>&1
+  $eapPrev = $ErrorActionPreference; $ErrorActionPreference = "Continue"; $log = & (CC-HostExe) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $runner -CovenantGateRoot $CovenantGateRoot -EvalInputPath $EvalInputPath -OutPath $OutPath 2>&1; $ErrorActionPreference = $eapPrev
   $code = $LASTEXITCODE
   CC-WriteTextFile ($OutPath + ".log.txt") (($log | Out-String))
   if($code -ne 0 -or -not (Test-Path -LiteralPath $OutPath -PathType Leaf)){
@@ -91,7 +91,7 @@ function CCG-VerifyDocumentSignature([string]$RepoRoot,[string]$DocPath,[string]
   if([string]::IsNullOrWhiteSpace($Signer)){ return "CG_DOCUMENT_SIGNER_NOT_CONFIGURED" }
   if(-not (Test-Path -LiteralPath ($DocPath + ".sig") -PathType Leaf)){ return "CG_DOCUMENT_SIGNATURE_MISSING" }
   $verify = Join-Path $PSScriptRoot "courier_verify_signature_v1.ps1"
-  $out = & (CC-HostExe) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $verify -RepoRoot $RepoRoot -MessagePath $DocPath -SignerIdentity $Signer -Namespace "covenant-gate/decision" 2>&1
+  $eapPrev = $ErrorActionPreference; $ErrorActionPreference = "Continue"; $out = & (CC-HostExe) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $verify -RepoRoot $RepoRoot -MessagePath $DocPath -SignerIdentity $Signer -Namespace "covenant-gate/decision" 2>&1; $ErrorActionPreference = $eapPrev
   if($LASTEXITCODE -ne 0){
     $t = ($out | Out-String)
     if($t -match 'UNTRUSTED_SIGNER'){ return "CG_DOCUMENT_UNTRUSTED_SIGNER" }

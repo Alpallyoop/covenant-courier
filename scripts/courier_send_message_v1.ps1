@@ -20,7 +20,7 @@ $Scripts = Join-Path $RepoRoot "scripts"
 $PSExe = ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
 
 function Run-Child([string]$Script,[string[]]$ChildArgs,[int[]]$OkCodes = @(0)){
-  $out = & $PSExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Script @ChildArgs 2>&1
+  $eapPrev = $ErrorActionPreference; $ErrorActionPreference = "Continue"; $out = & $PSExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Script @ChildArgs 2>&1; $ErrorActionPreference = $eapPrev
   $code = $LASTEXITCODE
   $text = ($out | Out-String)
   Write-Host $text.Trim()

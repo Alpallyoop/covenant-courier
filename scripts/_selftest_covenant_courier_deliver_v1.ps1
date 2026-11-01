@@ -36,6 +36,7 @@ $r = Child (Join-Path $PSScriptRoot "courier_bootstrap_local_trust_v1.ps1") @("-
 Copy-Item -LiteralPath (Join-Path $RepoRoot "policy\courier_product_policy_v1.json") -Destination (Join-Path $Sandbox "policy") -Force
 Copy-Item -LiteralPath (Join-Path $RepoRoot "policies\lexicon") -Destination (Join-Path $Sandbox "policies") -Recurse -Force
 Copy-Item -Path (Join-Path $RepoRoot "proofs\keys\courier_courier-local_covenant_ed25519*") -Destination (Join-Path $Sandbox "proofs\keys") -Force
+CC-RestrictPrivateKey (Join-Path $Sandbox "proofs\keys\courier_courier-local_covenant_ed25519")
 Copy-Item -LiteralPath (Join-Path $RepoRoot "proofs\trust\allowed_signers") -Destination (Join-Path $Sandbox "proofs\trust") -Force
 $r = Child (Join-Path $PSScriptRoot "courier_seed_demo_registry_v1.ps1") @("-RepoRoot",$Sandbox); Must ($r.Code -eq 0) "SEED"
 $r = Child (Join-Path $PSScriptRoot "courier_open_session_v1.ps1") @("-RepoRoot",$Sandbox,"-SessionId","session-alpha-beta-001","-SenderNodeId","node-alpha","-RecipientNodeId","node-beta","-NetworkId","courier-internal-net-v1","-SessionRole","message-delivery"); Must ($r.Code -eq 0) "OPEN_SESSION"
