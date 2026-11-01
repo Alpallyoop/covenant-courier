@@ -99,7 +99,9 @@ $jobs|ForEach-Object{$_.WaitForExit();if($_.ExitCode-ne 0){throw "VTP2_SELFTEST_
 $numbers=@(Get-ChildItem -LiteralPath $Root -Filter "concurrent-*.json"|ForEach-Object{[uint64](Get-Content -LiteralPath $_.FullName -Raw|ConvertFrom-Json).message_number})
 if(@($numbers|Sort-Object -Unique).Count-ne 6){throw "VTP2_SELFTEST_FAIL:CONCURRENT_COUNTER_REUSE"}
 
-$corrupt=Join-Path $Root "corrupt.state";[IO.File]::WriteAllBytes($corrupt,[IO.File]::ReadAllBytes($Alice));$bytes=[IO.File]::ReadAllBytes($corrupt);$bytes[10]=$bytes[10]-bxor 255;[IO.File]::WriteAllBytes($corrupt,$bytes)
+# Corrupt the last byte (inside the authenticated part): on Windows the DPAPI blob header (byte 10 is
+# its provider GUID) is not covered by the blob's MAC, so a header flip may still decrypt.
+$corrupt=Join-Path $Root "corrupt.state";[IO.File]::WriteAllBytes($corrupt,[IO.File]::ReadAllBytes($Alice));$bytes=[IO.File]::ReadAllBytes($corrupt);$bytes[$bytes.Length-1]=$bytes[$bytes.Length-1]-bxor 255;[IO.File]::WriteAllBytes($corrupt,$bytes)
 Expect-Fail "VTP2_STATE_PROTECTION_FAILED" @("bundle","--state",$corrupt,"--out",(Join-Path $Root "corrupt.bundle"))
 
 # --- Parser strictness: duplicate keys and unknown fields fail closed.
