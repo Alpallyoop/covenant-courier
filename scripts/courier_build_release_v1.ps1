@@ -83,8 +83,10 @@ if(-not $SkipSmoke){
   $croot = Join-Path $clean $name
   $ps = CC-HostExe
   function Smoke([string]$Script,[string[]]$A,[string]$Token,[string]$Label){
+    # Run from inside the extracted folder, as a user would, so nothing resolves against this checkout.
     $eapPrev = $ErrorActionPreference; $ErrorActionPreference = "Continue"
-    $o = & $ps -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Script @A 2>&1; $c = $LASTEXITCODE
+    Push-Location -LiteralPath $croot
+    try { $o = & $ps -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Script @A 2>&1; $c = $LASTEXITCODE } finally { Pop-Location }
     $ErrorActionPreference = $eapPrev
     $t = ($o | Out-String)
     [IO.File]::WriteAllText((Join-Path $OutDir ("smoke-" + $Label + ".log")),$t,(CC-Utf8NoBom))

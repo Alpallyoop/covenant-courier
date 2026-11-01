@@ -239,7 +239,7 @@ if($Command -eq "send"){
     "-NetworkId","courier-internal-net-v1",
     "-SessionId","session-alpha-beta-001",
     "-SenderRole","message-delivery",
-    "-DropRoot",("runtime\nodes\" + $To + "\inbox\drop")
+    "-DropRoot",(Join-Path $RepoRoot ("runtime\nodes\" + $To + "\inbox\drop"))
   )
 
   Write-Host "VTP_SEND_OK"
