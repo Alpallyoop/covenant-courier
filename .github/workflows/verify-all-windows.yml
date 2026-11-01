@@ -49,10 +49,12 @@ jobs:
           $PSVersionTable.PSVersion.ToString()
           exit 0
 
+      # The step itself runs in pwsh (a step's shell cannot come from the matrix); it starts
+      # verify-all in the matrix host: powershell.exe (5.1) or pwsh (7).
       - name: courier.ps1 verify-all
-        shell: ${{ matrix.shell }}
+        shell: pwsh
         run: |
-          # Continue: Windows PowerShell 5.1 turns redirected native stderr into terminating errors under Stop.
+          # Continue: redirected native stderr must not stop the step.
           $ErrorActionPreference = "Continue"
           $exe = if ("${{ matrix.shell }}" -eq "powershell") { "powershell.exe" } else { "pwsh" }
           $log = Join-Path $env:RUNNER_TEMP "verify-all.log"
