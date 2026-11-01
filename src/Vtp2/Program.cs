@@ -25,6 +25,7 @@ try
         case "decrypt": Commands.Decrypt(a); break;
         case "inspect": Commands.Inspect(a); break;
         case "status": Commands.Status(a); break;
+        case "session-close": Commands.SessionClose(a); break;
         case "kat": Commands.KnownAnswerTests(); break;
         default: throw new VtpException("VTP2_UNKNOWN_COMMAND");
     }
@@ -44,7 +45,11 @@ static class Protocol
     public const string Suite = "VTP2-P256-HKDFSHA256-CHACHA20POLY1305";
     public const int MaxInput = 1024 * 1024;
     public const int MaxPlain = 768 * 1024 - 4096; // leaves room for the envelope header within MaxInput after base64
-    public const int MaxSkippedKeys = 100;
+    // Skipped message keys: at most MaxSkipGap derived for one gap; at most MaxStoredSkippedKeys kept per
+    // session (oldest evicted first); each is deleted once used or when older than the message lifetime.
+    public const int MaxSkipGap = 1000;
+    public const int MaxStoredSkippedKeys = 2000;
+    public const long MaxStateBytes = 64L * 1024 * 1024;
     public const int OneTimePrekeyPool = 20;
     public const int ReplayJournal = 4096;
     public static readonly TimeSpan BundleLifetime = TimeSpan.FromDays(30);
@@ -211,7 +216,7 @@ static class Commands
         using var eph=ECDiffieHellman.Create(ECCurve.NamedCurves.nistP256);
         var ownBundle=SignedBundle(state);
         var sessionId=RandomId();
-        var body=new JsonObject{{"schema","vtp.session_init.v2"},{"suite",Suite},{"session_id",sessionId},{"created_utc",Now().ToString("O")},{"initiator_bundle",ownBundle},{"recipient_device_id",peerId},{"recipient_fingerprint",Fingerprint(NeedString(peerBundle,"identity_sign_public_b64"))},{"recipient_bundle_sequence",peerSequence},{"ephemeral_public_b64",B64(eph.ExportSubjectPublicKeyInfo())},{"one_time_prekey_id",opkId}};
+        var body=new JsonObject{{"schema","vtp.session_init.v3"},{"suite",Suite},{"session_id",sessionId},{"created_utc",Now().ToString("O")},{"initiator_bundle",ownBundle},{"recipient_device_id",peerId},{"recipient_fingerprint",Fingerprint(NeedString(peerBundle,"identity_sign_public_b64"))},{"recipient_bundle_sequence",peerSequence},{"ephemeral_public_b64",B64(eph.ExportSubjectPublicKeyInfo())},{"one_time_prekey_id",opkId}};
         using(var s=LoadSign(state.SignPrivate)) body["signature_b64"]=B64(s.SignData(Canonical.Bytes(body),HashAlgorithmName.SHA256));
         var secret=InitiatorSecret(state,eph,peerBundle,NeedString(opk,"public_b64"));
         var keys=DeriveInitial(secret,Transcript(body)); CryptographicOperations.ZeroMemory(secret);
@@ -230,7 +235,7 @@ static class Commands
     {
         var statePath=a.Need("state"); var state=StateStore.Load(statePath); var req=ReadObject(a.Need("request"));
         RequireExactFields(req,Protocol.SessionInitFields,"SESSION_INIT");
-        Expect(req,"schema","vtp.session_init.v2"); Expect(req,"suite",Suite);
+        Expect(req,"schema","vtp.session_init.v3"); Expect(req,"suite",Suite);
         if(NeedString(req,"recipient_device_id")!=state.DeviceId) throw new VtpException("VTP2_WRONG_RECIPIENT");
         var bundle=req["initiator_bundle"] as JsonObject ?? throw new VtpException("VTP2_BAD_INITIATOR_BUNDLE"); ValidateBundle(bundle); RequireTrusted(state,bundle);
         VerifySignedObject(req,NeedString(bundle,"identity_sign_public_b64"));
@@ -265,7 +270,7 @@ static class Commands
         if(number==ulong.MaxValue) throw new VtpException("VTP2_COUNTER_EXHAUSTED");
         var chain=Unb64(session.SendChain); var (mk,next)=Advance(chain); CryptographicOperations.ZeroMemory(chain);
         var nonce=RandomNumberGenerator.GetBytes(12); var created=Now();
-        var header=new JsonObject{{"schema","vtp.message.v2"},{"suite",Suite},{"session_id",session.SessionId},{"sender_device_id",state.DeviceId},{"recipient_device_id",session.PeerDeviceId},{"message_id",messageId},{"ratchet_public_b64",session.RatchetPublic},{"previous_chain_length",session.PreviousSendCount},{"message_number",number},{"created_utc",created.ToString("O")},{"expires_utc",created.Add(Protocol.MessageLifetime).ToString("O")},{"content_type",contentType},{"nonce_b64",B64(nonce)},{"ciphertext_length",plain.Length}};
+        var header=new JsonObject{{"schema","vtp.message.v3"},{"suite",Suite},{"session_id",session.SessionId},{"sender_device_id",state.DeviceId},{"recipient_device_id",session.PeerDeviceId},{"message_id",messageId},{"ratchet_public_b64",session.RatchetPublic},{"previous_chain_length",session.PreviousSendCount},{"message_number",number},{"created_utc",created.ToString("O")},{"expires_utc",created.Add(Protocol.MessageLifetime).ToString("O")},{"content_type",contentType},{"nonce_b64",B64(nonce)},{"ciphertext_length",plain.Length}};
         var cipher=new byte[plain.Length]; var tag=new byte[16]; using(var c=new ChaCha20Poly1305(mk)) c.Encrypt(nonce,plain,cipher,tag,Canonical.Bytes(header));
         header["ciphertext_b64"]=B64(cipher); header["tag_b64"]=B64(tag);
         // The receiver refuses envelopes above MaxInput: never burn a message number on one.
@@ -279,7 +284,7 @@ static class Commands
     {
         var statePath=a.Need("state"); var state=StateStore.Load(statePath); var env=ReadObject(a.Need("in"));
         RequireExactFields(env,Protocol.MessageFields,"MESSAGE");
-        Expect(env,"schema","vtp.message.v2"); Expect(env,"suite",Suite); var session=NeedSession(state,NeedString(env,"session_id"));
+        Expect(env,"schema","vtp.message.v3"); Expect(env,"suite",Suite); var session=NeedSession(state,NeedString(env,"session_id"));
         if(NeedString(env,"sender_device_id")!=session.PeerDeviceId || NeedString(env,"recipient_device_id")!=state.DeviceId) throw new VtpException("VTP2_MESSAGE_BINDING_MISMATCH");
         var id=ValidateId(NeedString(env,"message_id"),"MESSAGE_ID"); if(session.SeenMessageIds.Contains(id,StringComparer.Ordinal)) throw new VtpException("VTP2_REPLAY_DETECTED");
         var created=ParseTime(NeedString(env,"created_utc")); var expires=ParseTime(NeedString(env,"expires_utc")); var now=Now();
@@ -293,7 +298,8 @@ static class Commands
         // Every state change below happens on this loaded copy and is saved only after the AEAD check
         // passes: a forged or corrupted message changes nothing.
         byte[] messageKey; byte[]? nextChain=null; var ratcheted=false;
-        if(session.SkippedKeys.Remove(SkipKey(senderRatchet,n),out var saved)) messageKey=Unb64(saved);
+        PruneSkipped(session,now);
+        if(session.SkippedKeys.Remove(SkipKey(senderRatchet,n),out var saved)) messageKey=Unb64(saved.Split('|')[0]);
         else
         {
             if(!string.Equals(senderRatchet,session.PeerRatchetPublic,StringComparison.Ordinal))
@@ -301,24 +307,37 @@ static class Commands
                 // A new ratchet key from the peer: keep the keys still owed on the current receiving chain
                 // (up to the length the peer announces), then step the DH ratchet.
                 ulong owed=session.ReceiveChain is not null && pn>session.ReceiveNumber ? pn-session.ReceiveNumber : 0;
-                if(owed>(ulong)Protocol.MaxSkippedKeys || n>(ulong)Protocol.MaxSkippedKeys || (ulong)session.SkippedKeys.Count+owed+n>(ulong)Protocol.MaxSkippedKeys) throw new VtpException("VTP2_SKIP_LIMIT");
-                if(session.ReceiveChain is not null && session.PeerRatchetPublic is not null) SkipReceiveKeys(session,pn);
+                if(owed>(ulong)Protocol.MaxSkipGap || n>(ulong)Protocol.MaxSkipGap) throw new VtpException("VTP2_SKIP_LIMIT");
+                if(session.ReceiveChain is not null && session.PeerRatchetPublic is not null) SkipReceiveKeys(session,pn,now);
                 ReceivingRatchet(session,senderRatchet); NewSendingRatchet(session); ratcheted=true;
             }
             else if(n<session.ReceiveNumber) throw new VtpException("VTP2_REPLAY_OR_OLD_MESSAGE");
             if(session.ReceiveChain is null) throw new VtpException("VTP2_NO_RECEIVING_CHAIN");
-            if(n-session.ReceiveNumber>(ulong)Protocol.MaxSkippedKeys || (ulong)session.SkippedKeys.Count+(n-session.ReceiveNumber)>(ulong)Protocol.MaxSkippedKeys) throw new VtpException("VTP2_SKIP_LIMIT");
-            SkipReceiveKeys(session,n);
+            if(n-session.ReceiveNumber>(ulong)Protocol.MaxSkipGap) throw new VtpException("VTP2_SKIP_LIMIT");
+            SkipReceiveKeys(session,n,now);
             var chain=Unb64(session.ReceiveChain); var current=Advance(chain); CryptographicOperations.ZeroMemory(chain); messageKey=current.mk; nextChain=current.next;
         }
         var aad=env.DeepClone().AsObject(); aad.Remove("ciphertext_b64"); aad.Remove("tag_b64");
         var plain=new byte[cipher.Length]; using(var c=new ChaCha20Poly1305(messageKey)) c.Decrypt(nonce,cipher,tag,plain,Canonical.Bytes(aad));
         if(nextChain is not null){session.ReceiveChain=B64(nextChain);session.ReceiveNumber++;CryptographicOperations.ZeroMemory(nextChain);}
         session.SeenMessageIds.Add(id); if(session.SeenMessageIds.Count>Protocol.ReplayJournal)session.SeenMessageIds.RemoveAt(0);
-        // Replay state is committed before plaintext is released.
-        StateStore.Save(statePath,state); SafeFile.WriteBytes(a.Need("out"),plain); CryptographicOperations.ZeroMemory(messageKey); CryptographicOperations.ZeroMemory(plain);
+        // Replay state is committed before plaintext is released; the plaintext is first written next to its
+        // destination, so a failing output path does not consume the message.
+        var outPath=Path.GetFullPath(a.Need("out")); var pending=outPath+".vtp2-pending";
+        if(Directory.Exists(outPath)) throw new VtpException("VTP2_OUTPUT_PATH_INVALID");
+        SafeFile.WriteBytes(pending,plain);
+        try{StateStore.Save(statePath,state);}catch{try{File.Delete(pending);}catch{}throw;}
+        File.Move(pending,outPath,true); CryptographicOperations.ZeroMemory(messageKey); CryptographicOperations.ZeroMemory(plain);
         if(ratcheted) Console.WriteLine("VTP2_RATCHET_STEP:"+session.RatchetSteps);
         Console.WriteLine("VTP2_DECRYPT_OK:"+id);
+    }
+
+    // Deletes a session and every key it holds (a peer that is gone, or before re-establishing).
+    public static void SessionClose(Args a)
+    {
+        var statePath=a.Need("state"); var state=StateStore.Load(statePath); var id=a.Need("session");
+        if(!state.Sessions.Remove(id)) throw new VtpException("VTP2_UNKNOWN_SESSION");
+        StateStore.Save(statePath,state); Console.WriteLine("VTP2_SESSION_CLOSE_OK:"+id);
     }
 
     public static void Inspect(Args a) { var o=ReadObject(a.Need("in")); Console.WriteLine(NeedString(o,"schema")+":"+NeedString(o,"suite")); }
@@ -393,7 +412,10 @@ static class Commands
     static void RequireTrusted(DeviceState s,JsonObject b){var id=NeedString(b,"device_id");var fp=Fingerprint(NeedString(b,"identity_sign_public_b64"));if(!s.Trusted.TryGetValue(id,out var t)||t.Fingerprint!=fp)throw new VtpException("VTP2_UNTRUSTED_IDENTITY");if(t.SignPublic!=NeedString(b,"identity_sign_public_b64")||t.DhPublic!=NeedString(b,"identity_dh_public_b64"))throw new VtpException("VTP2_TRUSTED_KEY_MISMATCH");}
     static byte[] InitiatorSecret(DeviceState s,ECDiffieHellman eph,JsonObject b,string opk){using var id=LoadDh(s.DhPrivate);return Join(Agree(id,NeedString(b,"signed_prekey_public_b64")),Agree(eph,NeedString(b,"identity_dh_public_b64")),Agree(eph,NeedString(b,"signed_prekey_public_b64")),Agree(eph,opk));}
     static byte[] ResponderSecret(DeviceState s,string spkPrivate,string ephPub,JsonObject b,string opkPriv){using var spk=LoadDh(spkPrivate);using var id=LoadDh(s.DhPrivate);using var opk=LoadDh(opkPriv);return Join(Agree(spk,NeedString(b,"identity_dh_public_b64")),Agree(id,ephPub),Agree(spk,ephPub),Agree(opk,ephPub));}
-    static byte[] Agree(ECDiffieHellman own,string peer){using var p=ECDiffieHellman.Create();p.ImportSubjectPublicKeyInfo(Unb64(peer),out _);if(p.KeySize!=256)throw new VtpException("VTP2_BAD_KEY");return own.DeriveKeyFromHash(p.PublicKey,HashAlgorithmName.SHA256);}
+    // Only an uncompressed P-256 point under the named-curve OID (exactly 91 bytes of SPKI) is accepted;
+    // explicit curve parameters, other 256-bit curves and compressed points are refused before any ECDH.
+    static readonly byte[] P256SpkiPrefix=Convert.FromHexString("3059301306072a8648ce3d020106082a8648ce3d03010703420004");
+    static byte[] Agree(ECDiffieHellman own,string peer){var spki=Unb64(peer);if(spki.Length!=91||!spki.AsSpan(0,P256SpkiPrefix.Length).SequenceEqual(P256SpkiPrefix))throw new VtpException("VTP2_BAD_KEY");using var p=ECDiffieHellman.Create();p.ImportSubjectPublicKeyInfo(spki,out var read);if(read!=91||p.KeySize!=256)throw new VtpException("VTP2_BAD_KEY");return own.DeriveKeyFromHash(p.PublicKey,HashAlgorithmName.SHA256);}
     // Transcript hash over the signed handshake body without its signature: ECDSA signatures are
     // malleable, so binding keys to the signature bytes would let a relay break sessions.
     static byte[] Transcript(JsonObject signedBody){var c=signedBody.DeepClone().AsObject();c.Remove("signature_b64");return Canonical.Hash(c);}
@@ -406,12 +428,23 @@ static class Commands
     static void RequireRatchet(SessionState s){if(s.RatchetPrivate is null||s.RatchetPublic is null)throw new VtpException("VTP2_SESSION_LEGACY_REKEY_REQUIRED");}
     static string SkipKey(string ratchetPublic,ulong n)=>Convert.ToHexStringLower(SHA256.HashData(Unb64(ratchetPublic)))+":"+n.ToString(System.Globalization.CultureInfo.InvariantCulture);
     // Derive and keep the message keys of the current receiving chain up to (not including) `until`.
-    static void SkipReceiveKeys(SessionState s,ulong until)
+    static void SkipReceiveKeys(SessionState s,ulong until,DateTimeOffset now)
     {
         if(s.ReceiveChain is null||s.PeerRatchetPublic is null||until<=s.ReceiveNumber) return;
         var chain=Unb64(s.ReceiveChain);
-        while(s.ReceiveNumber<until){var step=Advance(chain);CryptographicOperations.ZeroMemory(chain);chain=step.next;s.SkippedKeys[SkipKey(s.PeerRatchetPublic,s.ReceiveNumber)]=B64(step.mk);CryptographicOperations.ZeroMemory(step.mk);s.ReceiveNumber++;}
+        while(s.ReceiveNumber<until){var step=Advance(chain);CryptographicOperations.ZeroMemory(chain);chain=step.next;s.SkippedKeys[SkipKey(s.PeerRatchetPublic,s.ReceiveNumber)]=B64(step.mk)+"|"+now.ToUnixTimeSeconds().ToString(System.Globalization.CultureInfo.InvariantCulture);CryptographicOperations.ZeroMemory(step.mk);s.ReceiveNumber++;}
         s.ReceiveChain=B64(chain); CryptographicOperations.ZeroMemory(chain);
+        PruneSkipped(s,now);
+    }
+    // Drops skipped keys older than a message may live (their messages are refused as expired anyway), then
+    // the oldest beyond the per-session cap. A lost message therefore never blocks a session for good.
+    static void PruneSkipped(SessionState s,DateTimeOffset now)
+    {
+        var limit=now.Subtract(Protocol.MessageLifetime+Protocol.ClockSkew).ToUnixTimeSeconds();
+        static long Stamp(string v){var i=v.IndexOf('|');return i>0&&long.TryParse(v.AsSpan(i+1),System.Globalization.NumberStyles.None,System.Globalization.CultureInfo.InvariantCulture,out var t)?t:0;}
+        foreach(var k in s.SkippedKeys.Where(p=>Stamp(p.Value)<limit).Select(p=>p.Key).ToList()) s.SkippedKeys.Remove(k);
+        if(s.SkippedKeys.Count>Protocol.MaxStoredSkippedKeys)
+            foreach(var k in s.SkippedKeys.OrderBy(p=>Stamp(p.Value)).ThenBy(p=>p.Key,StringComparer.Ordinal).Take(s.SkippedKeys.Count-Protocol.MaxStoredSkippedKeys).Select(p=>p.Key).ToList()) s.SkippedKeys.Remove(k);
     }
     // Receiving half: a new peer ratchet key gives a new receiving chain from ECDH(our current key, theirs).
     static void ReceivingRatchet(SessionState s,string peerRatchet)
@@ -493,13 +526,13 @@ static class StateStore
     }
     public static DeviceState Load(string path)
     {
-        var data=SafeFile.Read(Path.GetFullPath(path),Protocol.MaxInput*8);
+        var data=SafeFile.Read(Path.GetFullPath(path),(int)Math.Min(Protocol.MaxStateBytes,int.MaxValue));
         var raw=StateProtection.Unprotect(data);
         try{return JsonSerializer.Deserialize<DeviceState>(raw)??throw new VtpException("VTP2_STATE_CORRUPT");}
         catch(JsonException){throw new VtpException("VTP2_STATE_CORRUPT");}
         finally{CryptographicOperations.ZeroMemory(raw);}
     }
-    public static void Save(string path,DeviceState s){var raw=JsonSerializer.SerializeToUtf8Bytes(s);try{SafeFile.WriteBytes(path,StateProtection.Protect(raw),ownerOnly:true);}finally{CryptographicOperations.ZeroMemory(raw);}}
+    public static void Save(string path,DeviceState s){foreach(var k in s.Sessions.Where(x=>x.Value.RatchetPrivate is null).Select(x=>x.Key).ToList())s.Sessions.Remove(k);var raw=JsonSerializer.SerializeToUtf8Bytes(s);try{SafeFile.WriteBytes(path,StateProtection.Protect(raw),ownerOnly:true);}finally{CryptographicOperations.ZeroMemory(raw);}}
 }
 
 static class SafeFile

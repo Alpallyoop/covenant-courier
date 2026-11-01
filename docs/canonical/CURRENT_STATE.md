@@ -16,7 +16,7 @@ and integrations proposed for the registry: `docs/proposals/0001-covenant-courie
 | NeverLost-issued node signers | `courier.ps1 node-signer` creates a node key for `single-tenant/device_agent/courier/<node-id>` and switches the node's registry principal only after a trust import carries that exact key. | `scripts/_selftest_courier_node_signer_v1.ps1` |
 | VTP v1 transport | Frames, listener, node loop, outbox, replay guard, UDP wire adapter (bindings from the session registry). | `vtp.ps1 verify`, `_RUN_*` suites |
 | VTP v2 secure core (`vtp2.ps1`) | X3DH-style P-256 handshake, per-direction symmetric chains, ChaCha20-Poly1305, rotation, strict decoding, KATs. | `vtp2.ps1 verify` |
-| Payload encryption in delivery | Profiles with `payload_encryption: vtp2` (shipped: `confidential`) send the payload only as a `vtp.message.v2` under the VTP v2 session bound to the Courier session (`courier.ps1 secure-session`); unbound sessions quarantine; a bound session is always sealed (payloads up to 600,000 bytes); receive decrypts and refuses a plaintext downgrade. | deliver selftest (VTP v2 cases) |
+| Payload encryption in delivery | Profiles with `payload_encryption: vtp2` (shipped: `confidential`) send the payload only as a `vtp.message.v3` under the VTP v2 session bound to the Courier session (`courier.ps1 secure-session`); unbound sessions quarantine; a bound session is always sealed (payloads up to 600,000 bytes); receive decrypts and refuses a plaintext downgrade. | deliver selftest (VTP v2 cases) |
 | Message origin | Optional `origin` (`human`/`ai`/`service`) carried to Covenant Gate as `action.origin` (`unspecified` when absent). | deliver selftest |
 
 ## Known limits (true today)
@@ -26,7 +26,9 @@ and integrations proposed for the registry: `docs/proposals/0001-covenant-courie
   encrypted at rest or in the filesystem-drop transport unless the profile requires VTP v2 payload
   encryption; otherwise payload confidentiality on the wire exists only in the v1 UDP adapter
   (transitional AES-CBC+HMAC with a local key envelope). Released inbox payloads are plaintext on disk.
-- VTP v2 has no in-session DH ratchet (post-compromise recovery needs a new session).
+- VTP v2.1 has an in-session DH ratchet (post-compromise recovery against a passive adversary once both
+  devices have used post-compromise ratchet keys); neither the protocol nor the implementation has had an
+  independent human cryptographic review. Sessions made before 2.1 must be re-established.
 - Local signing keys are created by `courier_bootstrap_local_trust_v1.ps1` under `proofs/keys/` without
   a passphrase (local development trust). Production signers should come from NeverLost
   (`courier.ps1 node-signer`); node keys it creates are also unencrypted files under `proofs/keys/`.

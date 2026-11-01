@@ -112,6 +112,14 @@ Mutate $a4 $forged {param($o)$o.ratchet_public_b64=$bobSpk}
 Expect-Fail "VTP2_CRYPTOGRAPHIC_FAILURE" @("decrypt","--state",$Bob,"--in",$forged,"--out",(Join-Path $Root "forged.out"))
 [void](Dec $Bob $a4 "a4")
 Write-Host "VTP2_RATCHET_OK:FORGED_RATCHET_KEY_REFUSED"
+# Only a named-curve, uncompressed P-256 point is accepted as a ratchet key.
+$a5=Enc $Alice "a5" "r-a5"; $compressed=Join-Path $Root "r-compressed.json"
+Mutate $a5 $compressed {param($o)$k=[Convert]::FromBase64String([string]$o.ratchet_public_b64);$o.ratchet_public_b64=[Convert]::ToBase64String([byte[]]($k[0..25]+[byte]2+$k[27..58]))}
+Expect-Fail "VTP2_BAD_KEY" @("decrypt","--state",$Bob,"--in",$compressed,"--out",(Join-Path $Root "compressed.out"))
+# An output path that cannot be written does not consume the message.
+Expect-Fail "VTP2_OUTPUT_PATH_INVALID" @("decrypt","--state",$Bob,"--in",$a5,"--out",$Root)
+[void](Dec $Bob $a5 "a5")
+Write-Host "VTP2_RATCHET_OK:STRICT_KEYS_AND_OUTPUT_FAILURE_SAFE"
 # The responder may send first, before it has received anything (initial r2i chain under its signed prekey).
 $Init2=Join-Path $Root "session-init-2.json"; [void](Out @("session-init","--state",$Alice,"--peer-bundle",$BB,"--out",$Init2))
 $S2=[string](Get-Content -LiteralPath $Init2 -Raw|ConvertFrom-Json).session_id; [void](Out @("session-accept","--state",$Bob,"--request",$Init2))
@@ -121,6 +129,9 @@ $ap=Join-Path $Root "r-a-first.txt"; [IO.File]::WriteAllText($ap,"initiator-firs
 [void](Out @("encrypt","--state",$Alice,"--session",$S2,"--in",$ap,"--out",$am))
 [void](Dec $Alice $bm "responder-first"); [void](Dec $Bob $am "initiator-first")
 Write-Host "VTP2_RATCHET_OK:RESPONDER_SENDS_FIRST_AND_CONCURRENT"
+[void](Out @("session-close","--state",$Bob,"--session",$S2))
+Expect-Fail "VTP2_UNKNOWN_SESSION" @("decrypt","--state",$Bob,"--in",$am,"--out",(Join-Path $Root "closed.out"))
+Write-Host "VTP2_RATCHET_OK:SESSION_CLOSE"
 
 $freshPlain=Join-Path $Root "fresh.txt";[IO.File]::WriteAllText($freshPlain,"fresh-secret-for-tamper",[Text.UTF8Encoding]::new($false));$freshMsg=Join-Path $Root "fresh.json"
 Run @("encrypt","--state",$Alice,"--session",$Session,"--in",$freshPlain,"--out",$freshMsg)
@@ -137,7 +148,7 @@ $BobReplacement=Join-Path $Root "bob-replacement.state";$BobReplacementBundle=Jo
 Run @("init","--state",$BobReplacement,"--device","bob-device");Run @("bundle","--state",$BobReplacement,"--out",$BobReplacementBundle)
 Expect-Fail "VTP2_IDENTITY_CHANGED" @("trust","--state",$Alice,"--bundle",$BobReplacementBundle,"--fingerprint",(Fingerprint $BobReplacementBundle))
 
-$skip=Join-Path $Root "skip.json";Mutate $freshMsg $skip {param($o)$o.message_number=1000}
+$skip=Join-Path $Root "skip.json";Mutate $freshMsg $skip {param($o)$o.message_number=5000}
 Expect-Fail "VTP2_SKIP_LIMIT" @("decrypt","--state",$Bob,"--in",$skip,"--out",(Join-Path $Root "skip.out"))
 $expired=Join-Path $Root "expired.json";Mutate $freshMsg $expired {param($o)$o.expires_utc="2000-01-01T00:00:00.0000000+00:00"}
 Expect-Fail "VTP2_MESSAGE_EXPIRED" @("decrypt","--state",$Bob,"--in",$expired,"--out",(Join-Path $Root "expired.out"))
@@ -183,11 +194,13 @@ Expect-Fail "VTP2_CRYPTOGRAPHIC_FAILURE" @("decrypt","--state",$Bob,"--in",$ctTa
 Run @("decrypt","--state",$Bob,"--in",$freshMsg,"--out",(Join-Path $Root "fresh.out"))
 if((Get-Content -LiteralPath (Join-Path $Root "fresh.out") -Raw)-ne"fresh-secret-for-tamper"){throw "VTP2_SELFTEST_FAIL:STATE_BURNED_BY_REJECTED_INPUT"}
 
-# --- Skipped-key budget is bounded in total, not just per gap.
+# --- Skipped keys: two gaps on one chain are both kept (stored keys are bounded per session by eviction of
+# the oldest, and by age; a single gap above 1000 is refused, see the SKIP_LIMIT case above), so a lost
+# message never blocks the session.
 $burst=@();for($i=0;$i -lt 60;$i++){$p=Join-Path $Root ("burst-"+$i+".json");Run @("encrypt","--state",$Alice,"--session",$Session,"--in",$freshPlain,"--out",$p);$burst+=$p}
 Run @("decrypt","--state",$Bob,"--in",$burst[59],"--out",(Join-Path $Root "burst59.out"))
 $more=@();for($i=0;$i -lt 60;$i++){$p=Join-Path $Root ("burst2-"+$i+".json");Run @("encrypt","--state",$Alice,"--session",$Session,"--in",$freshPlain,"--out",$p);$more+=$p}
-Expect-Fail "VTP2_SKIP_LIMIT" @("decrypt","--state",$Bob,"--in",$more[59],"--out",(Join-Path $Root "burst-over.out"))
+Run @("decrypt","--state",$Bob,"--in",$more[59],"--out",(Join-Path $Root "burst-over.out"))
 Run @("decrypt","--state",$Bob,"--in",$burst[10],"--out",(Join-Path $Root "burst10.out"))
 
 # --- Bundle rotation, rollback and stale sequences.

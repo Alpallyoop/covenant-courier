@@ -97,7 +97,7 @@
             "none",
             "vtp2"
           ],
-          "description": "Optional, default none. vtp2: the payload travels only as a vtp.message.v2 envelope under the VTP v2 session bound to the Courier session (courier_secure_session_v1.ps1); without a binding the delivery is held as require_stronger_session (reason VTP2_SESSION_NOT_BOUND)."
+          "description": "Optional, default none. vtp2: the payload travels only as a vtp.message.v3 envelope under the VTP v2 session bound to the Courier session (courier_secure_session_v1.ps1); without a binding the delivery is held as require_stronger_session (reason VTP2_SESSION_NOT_BOUND)."
         }
       }
     }

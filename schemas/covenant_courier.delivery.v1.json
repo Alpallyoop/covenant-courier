@@ -31,7 +31,7 @@
     "payload_vtp2_b64": {
       "type": "string",
       "contentEncoding": "base64",
-      "description": "Base64 of a vtp.message.v2 envelope (spec/VTP_V2_SECURITY_PROTOCOL.md) carrying the payload under the VTP v2 session bound to message.session_id (covenant_courier.vtp2_binding.v1). The receiver decrypts with the recipient node's device state and recomputes message.payload_sha256 over the plaintext."
+      "description": "Base64 of a vtp.message.v3 envelope (spec/VTP_V2_SECURITY_PROTOCOL.md) carrying the payload under the VTP v2 session bound to message.session_id (covenant_courier.vtp2_binding.v1). The receiver decrypts with the recipient node's device state and recomputes message.payload_sha256 over the plaintext."
     }
   },
   "oneOf": [

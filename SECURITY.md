@@ -66,7 +66,7 @@ receiver verifies the signature, the frame hash and the envelope's binding to th
 receipt before releasing anything. By default the envelope is not encrypted: on the filesystem-drop
 transport the payload is readable by anyone who can read the node folders. A profile with
 `payload_encryption: vtp2` (the shipped `confidential` profile) sends the payload only as a VTP v2
-`vtp.message.v2` under the session bound with `courier.ps1 secure-session`; with no binding nothing is
+`vtp.message.v3` under the session bound with `courier.ps1 secure-session`; with no binding nothing is
 sent (quarantined); a bound session always carries the payload encrypted, and the receiver refuses a
 plaintext envelope on a bound session or for a profile its own policy marks vtp2 (downgrade). A sealed
 envelope does not carry the sender's free-text preview. Not covered: a process killed mid-delivery can
@@ -81,7 +81,13 @@ its signature), not authenticated by Covenant Gate. Released inbox payloads are 
 Suite `VTP2-P256-HKDFSHA256-CHACHA20POLY1305` (spec: `spec/VTP_V2_SECURITY_PROTOCOL.md`). Device state
 is DPAPI-protected on Windows. Elsewhere it is sealed with ChaCha20-Poly1305 under a 32-byte key file
 named by `VTP2_STATE_KEY_FILE` (owner-only permissions required); there is no plaintext state mode.
-The implementation has not been independently reviewed.
+Revision 2.1 adds an in-session DH ratchet: a copied state stops decrypting once both devices have used
+ratchet keys made after the copy (passive adversary). An active adversary holding a copy can still inject
+and hold a man-in-the-middle position until the session is closed (`vtp2.ps1 session-close`) and
+re-established; the real device's messages then fail, which is the visible sign. Whole-state rollback is
+not detected, and keys in managed memory and in old copies of the state file are not reliably erased.
+The protocol and implementation have had internal (AI) review only; an independent cryptographic review is
+required before relying on them against a capable adversary.
 
 ## Signature verification
 

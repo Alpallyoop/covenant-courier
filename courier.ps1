@@ -24,6 +24,8 @@ param(
   [string]$Vtp2SessionId,
   [string]$SenderFingerprint,
   [string]$RecipientFingerprint,
+  # receipt-chain: re-verify without appending
+  [switch]$VerifyOnly,
   # node-signer (NeverLost-issued node signing keys)
   [string]$NodeId,
   [string]$Principal,
@@ -74,7 +76,7 @@ if($Command -eq "help"){
   Write-Host "  .\courier.ps1 receive"
   Write-Host "  .\courier.ps1 receive-negative"
   Write-Host "  .\courier.ps1 receipts"
-  Write-Host "  .\courier.ps1 receipt-chain"
+  Write-Host "  .\courier.ps1 receipt-chain [-VerifyOnly]"
   Write-Host "  .\courier.ps1 trust-import -TrustBundlePath <neverlost trust_bundle.json> -ExpectedSha256 <sha> [-NeverLostRoot <dir>]"
   Write-Host "  .\courier.ps1 integration-receipts [-Action verify|list|nfl-inboxes]"
   Write-Host "  .\courier.ps1 node-signer -Action keygen|adopt|status -NodeId <node> [-Principal single-tenant/device_agent/...]"
@@ -173,7 +175,8 @@ if($Command -eq "receive-negative"){
 }
 
 if($Command -eq "receipt-chain"){
-  Run-PS (Join-Path $Scripts "courier_receipt_chain_v1.ps1") @("-RepoRoot",$RepoRoot)
+  $a = @("-RepoRoot",$RepoRoot); if($VerifyOnly){ $a += @("-VerifyOnly") }
+  Run-PS (Join-Path $Scripts "courier_receipt_chain_v1.ps1") $a
   exit 0
 }
 throw ("UNKNOWN_COURIER_COMMAND:" + $Command)

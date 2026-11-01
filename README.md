@@ -65,7 +65,7 @@ The full caller contract is in `docs/integrations/README.md`.
 ### VTP protocol CLI
 
     .\vtp.ps1 verify | transmit -To node-beta | wire-smoke | wire-ingest | wire-negative | dlp-test | receipts
-    .\vtp2.ps1 verify | build | init | bundle | rotate | trust | session-init | session-accept | encrypt | decrypt | status | kat
+    .\vtp2.ps1 verify | build | init | bundle | rotate | trust | session-init | session-accept | encrypt | decrypt | session-close | status | kat
     .\courier-secure.ps1 init|bundle|trust|connect|accept|send|receive|inspect|verify     (VTP v2 wrapper)
 
 ## Product flow
@@ -78,7 +78,7 @@ The full caller contract is in `docs/integrations/README.md`.
       write covenant_courier.policy_decision.v1 and covenant_courier.notification.v1
       allowed  -> sign covenant_courier.delivery.v1 (message + decision + notification + payload)
                   and send it as a VTP frame to the recipient node; a profile with
-                  payload_encryption "vtp2" carries the payload only as a vtp.message.v2 envelope
+                  payload_encryption "vtp2" carries the payload only as a vtp.message.v3 envelope
                   under the session's bound VTP v2 session (no binding -> quarantined,
                   REQUIRE_STRONGER_SESSION:VTP2_SESSION_NOT_BOUND)
       refused  -> reject, or quarantine under runtime/product_messages/quarantine/
@@ -181,13 +181,13 @@ for defense or classified deployment.
 
 Known remaining work:
 
-    in-session DH ratchet for VTP v2 (post-compromise recovery needs a new session)
+    independent (human) cryptographic review of VTP v2 and its DH ratchet
     profiles other than "confidential" still send signed, hash-bound frames without payload encryption
     fixed binary wire header
     NeverLost issuing the Courier node principals (Courier side done: courier.ps1 node-signer)
     service mode only if explicit
-    UI through Global Workbench
-    public release package for the current product core (v0.1.5 predates governed delivery)
+    Global Workbench plugin: run it against a real Courier checkout on Windows (panels are built)
+    publish the v0.2.0 release (built and smoke-tested; a draft until this branch merges)
 
 ## Release posture
 
@@ -227,6 +227,10 @@ Distribution instructions:
 Current distributable release:
 
     covenant-courier-v0.1.5-product-core
+
+Next release (draft, published when the governed-delivery branch merges): covenant-courier-v0.2.0-product-core,
+built by `scripts/courier_build_release_v1.ps1 -Version v0.2.0-product-core` (ZIP of a clean commit, release
+manifest, sha256sums, clean-extract smoke of `courier.ps1 verify` and `vtp2.ps1 verify`).
 
 Earlier v0.1.0 through v0.1.4 release assets are superseded.
 ## Public preview docs

@@ -4,7 +4,7 @@
 # "courier-<node-id>". A Courier session (registry/sessions/<id>.json) is bound to one VTP v2
 # session between its sender and recipient node devices by registry/vtp2_bindings/<id>.json
 # (covenant_courier.vtp2_binding.v1). A profile with payload_encryption "vtp2" sends the payload
-# only as a vtp.message.v2 envelope under that session; without a binding nothing is sent.
+# only as a vtp.message.v3 envelope under that session; without a binding nothing is sent.
 #
 # State protection is VTP v2's own: DPAPI on Windows, VTP2_STATE_KEY_FILE elsewhere. Courier never
 # creates or guesses that key.

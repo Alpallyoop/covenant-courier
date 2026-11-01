@@ -1,7 +1,10 @@
 param(
   [string]$RepoRoot = ".",
   [string]$ReceiptPath,
-  [string]$ChainPath
+  [string]$ChainPath,
+  # Re-verify only: report receipts not yet chained (COVENANT_COURIER_RECEIPT_CHAIN_UNCHAINED) and write
+  # nothing. Read-only callers (the Global Workbench plugin) use this.
+  [switch]$VerifyOnly
 )
 
 # Product receipt chain (covenant_courier.product_receipt_chain.v1), append-only.
@@ -80,7 +83,8 @@ for($i = 0; $i -lt $chainLines.Count; $i++){
 
 # 2. Append entries for new receipts.
 $appended = 0
-for($i = $chainLines.Count; $i -lt $lines.Count; $i++){
+if($VerifyOnly){ Write-Host ("COVENANT_COURIER_RECEIPT_CHAIN_UNCHAINED: " + [Math]::Max(0,$lines.Count - $chainLines.Count)) }
+for($i = $chainLines.Count; (-not $VerifyOnly) -and $i -lt $lines.Count; $i++){
   $receiptHash = CC-Sha256Text $lines[$i]
   $chainHash = CC-Sha256Text ($prev + ":" + $receiptHash)
   $entry = [ordered]@{

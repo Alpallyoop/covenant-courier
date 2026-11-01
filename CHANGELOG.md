@@ -4,6 +4,15 @@
 
 ### Added
 
+- VTP v2.1 in-session DH ratchet (spec section 6.1): envelopes `vtp.message.v3` carry the sender's ratchet key
+  and previous chain length; each round trip brings fresh P-256 ECDH from both devices (post-compromise recovery
+  against a passive adversary). Skipped keys: at most 1000 per gap, 2000 per session with oldest-first eviction,
+  deleted after the message lifetime. Public keys must be named-curve uncompressed P-256 SPKI. Decrypt stages the
+  plaintext before saving state and refuses a directory as output. `vtp2.ps1 session-close`. Pre-2.1 sessions
+  are refused and dropped. State limit 64 MiB. Internal review findings addressed; an independent human review is
+  still required.
+- `scripts/courier_build_release_v1.ps1`: release ZIP of a clean commit, manifest, sha256sums and clean-extract smoke.
+- `courier.ps1 receipt-chain -VerifyOnly`: re-verifies without appending (for read-only callers).
 - Payload encryption over VTP v2 for governed delivery: profile setting `payload_encryption` (`none` |
   `vtp2`; the `confidential` profile now requires `vtp2`). The envelope carries `payload_vtp2_b64` (a
   `vtp.message.v2`) instead of `payload_b64`; with no VTP v2 binding the delivery is quarantined

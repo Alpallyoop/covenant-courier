@@ -61,7 +61,7 @@ Payload encryption (profile `payload_encryption`: `none` default, `vtp2`; any ot
 (`courier.ps1 secure-session -SessionId <id> -LocalPair`, or `-Vtp2SessionId -SenderFingerprint
 -RecipientFingerprint` after pairing two machines with `vtp2.ps1`; the binding is
 `registry/vtp2_bindings/<session>.json`, `covenant_courier.vtp2_binding.v1`). The envelope then carries
-`payload_vtp2_b64` (a `vtp.message.v2` under that session) instead of `payload_b64`; `payload_sha256`
+`payload_vtp2_b64` (a `vtp.message.v3` under that session) instead of `payload_b64`; `payload_sha256`
 still covers the plaintext. Unbound: `quarantined`, exit 42. A session that has a binding always carries
 the payload encrypted, whatever the profile. Encrypted payloads are limited to 600,000 bytes
 (`PAYLOAD_TOO_LARGE`; the payload is base64-encoded twice inside the envelope), and the envelope's copy of
