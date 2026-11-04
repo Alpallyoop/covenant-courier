@@ -3,7 +3,9 @@ param(
   [string]$NodeId = "node-beta",
   [int]$Port = 47732,
   [int]$TimeoutMs = 10000,
-  [string]$PacketPath = ""
+  [string]$PacketPath = "",
+  # Loopback by default: listening on every interface is an explicit choice.
+  [string]$BindAddress = "127.0.0.1"
 )
 
 Set-StrictMode -Version Latest
@@ -12,8 +14,8 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "_lib_vtp_wire_session_v1.ps1")
 
 $RepoRoot = (Resolve-Path $RepoRoot).Path
-$PolicyGate = Join-Path $RepoRoot "scripts\vtp_policy_gate_v1.ps1"
-$ReplayGuard = Join-Path $RepoRoot "scripts\vtp_replay_guard_check_v1.ps1"
+$PolicyGate = Join-Path $PSScriptRoot "vtp_policy_gate_v1.ps1"
+$ReplayGuard = Join-Path $PSScriptRoot "vtp_replay_guard_check_v1.ps1"
 $MaxPacketBytes = 1048576
 $Runtime = Join-Path $RepoRoot ("runtime\wire_ingest\nodes\" + $NodeId)
 $Drop = Join-Path $Runtime "drop"
@@ -64,11 +66,23 @@ if(-not [string]::IsNullOrWhiteSpace($PacketPath)){
   if((Get-Item -LiteralPath $PacketPath).Length -gt $MaxPacketBytes){ throw "VTP_UDP_WIRE_INGEST_FAIL:PACKET_TOO_LARGE" }
   $bytes = [IO.File]::ReadAllBytes($PacketPath)
 } else {
-  $udp = New-Object Net.Sockets.UdpClient($Port)
-  $udp.Client.ReceiveTimeout = $TimeoutMs
-  $remote = New-Object Net.IPEndPoint([Net.IPAddress]::Any,0)
+  $udp = New-Object Net.Sockets.UdpClient((New-Object Net.IPEndPoint([Net.IPAddress]::Parse($BindAddress),$Port)))
+  # One stray or oversized datagram does not end the wait: keep receiving until a VTP1 packet or the
+  # deadline.
+  $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMs)
+  $bytes = $null
   try {
-    $bytes = $udp.Receive([ref]$remote)
+    while($null -eq $bytes){
+      $left = [int]($deadline - [DateTime]::UtcNow).TotalMilliseconds
+      if($left -le 0){ throw "VTP_UDP_WIRE_INGEST_FAIL:TIMEOUT" }
+      $udp.Client.ReceiveTimeout = $left
+      $remote = New-Object Net.IPEndPoint([Net.IPAddress]::Any,0)
+      try { $d = $udp.Receive([ref]$remote) } catch [Net.Sockets.SocketException] { throw "VTP_UDP_WIRE_INGEST_FAIL:TIMEOUT" }
+      if($d.Length -gt $MaxPacketBytes){ continue }
+      try { $probe = ([Text.Encoding]::UTF8.GetString($d) | ConvertFrom-Json -ErrorAction Stop) } catch { continue }
+      if($null -eq $probe -or -not ($probe.PSObject.Properties.Name -contains "header") -or [string]$probe.header.magic -cne "VTP1"){ continue }
+      $bytes = $d
+    }
   } finally {
     $udp.Close()
   }
@@ -82,7 +96,7 @@ if([int]$packet.header.version -ne 1){ throw "VTP_UDP_WIRE_INGEST_FAIL:BAD_VERSI
 if([string]$packet.header.cipher_suite -ne "AES-CBC-256-HMAC-SHA256-DEV"){ throw "VTP_UDP_WIRE_INGEST_FAIL:UNSUPPORTED_CIPHER" }
 
 $frameId = [string]$packet.header.frame_id
-if($frameId -notmatch '^frame-[0-9]{8}T[0-9]{9}Z$'){
+if($frameId -cnotmatch '^frame-[0-9]{8}T[0-9]{9}Z\z'){
   throw "VTP_UDP_WIRE_INGEST_FAIL:BAD_FRAME_ID"
 }
 # Bindings come from the one open registered session for this node whose ID hash the header names.
@@ -101,6 +115,8 @@ $headerBytes = [Text.Encoding]::UTF8.GetBytes($headerJson)
 $iv = [Convert]::FromBase64String([string]$packet.iv_b64)
 $cipherBytes = [Convert]::FromBase64String([string]$packet.ciphertext_b64)
 $tag = [Convert]::FromBase64String([string]$packet.tag_b64)
+if($iv.Length -ne 16){ throw "VTP_UDP_WIRE_INGEST_FAIL:BAD_IV_LENGTH" }
+if($tag.Length -ne 32){ throw "VTP_UDP_WIRE_INGEST_FAIL:BAD_TAG_LENGTH" }
 $macKey = Derive-Key "hmac"
 $macInput = New-Object byte[] ($headerBytes.Length + $iv.Length + $cipherBytes.Length)
 [Array]::Copy($headerBytes,0,$macInput,0,$headerBytes.Length)

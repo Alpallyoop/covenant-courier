@@ -82,9 +82,11 @@ Run-Step -Script $RegNet -ChildArgs @(
   "-AllowedNodesCsv","node-alpha,node-beta"
 ) -FailCode "COURIER_REGISTRY_FAIL:REGISTER_NETWORK"
 
+# A session of its own (closing the demo session would leave it closed: sessions are never reopened).
+$SelftestSession = "session-registry-selftest-" + (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssfffZ")
 Run-Step -Script $OpenSes -ChildArgs @(
   "-RepoRoot",$RepoRoot,
-  "-SessionId","session-alpha-beta-001",
+  "-SessionId",$SelftestSession,
   "-SenderNodeId","node-alpha",
   "-RecipientNodeId","node-beta",
   "-NetworkId","courier-internal-net-v1",
@@ -93,8 +95,15 @@ Run-Step -Script $OpenSes -ChildArgs @(
 
 Run-Step -Script $CloseSes -ChildArgs @(
   "-RepoRoot",$RepoRoot,
-  "-SessionId","session-alpha-beta-001"
+  "-SessionId",$SelftestSession
 ) -FailCode "COURIER_REGISTRY_FAIL:CLOSE_SESSION"
+
+# A closed session stays closed.
+$reopenOk = $true
+try { & $OpenSes -RepoRoot $RepoRoot -SessionId $SelftestSession -SenderNodeId "node-alpha" -RecipientNodeId "node-beta" -NetworkId "courier-internal-net-v1" -SessionRole "message-delivery" | Out-Null } catch { $reopenOk = $false; if($_.ToString() -notmatch "COURIER_SESSION_FAIL:SESSION_CLOSED"){ throw ("COURIER_REGISTRY_FAIL:REOPEN_WRONG_ERROR:" + $_.ToString()) } }
+if($reopenOk){ throw "COURIER_REGISTRY_FAIL:CLOSED_SESSION_REOPENED" }
+Remove-Item -LiteralPath (Join-Path $RepoRoot ("registry\sessions\" + $SelftestSession + ".json")) -Force
+Write-Host "COURIER_REGISTRY_CASE_OK: closed session -> reopen refused"
 
 Write-Host "COURIER_REGISTRY_SELFTEST_OK"
 exit 0

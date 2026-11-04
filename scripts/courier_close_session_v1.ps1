@@ -6,6 +6,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+if($SessionId -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\z' -or $SessionId.Contains("..")){ throw "COURIER_SESSION_FAIL:BAD_SESSION_ID" }
 $Path = Join-Path $RepoRoot ("registry\sessions\" + $SessionId + ".json")
 if(-not (Test-Path -LiteralPath $Path -PathType Leaf)){ throw "COURIER_CLOSE_SESSION_FAIL:UNKNOWN_SESSION" }
 

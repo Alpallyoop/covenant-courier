@@ -20,8 +20,10 @@ if(-not (Test-Path -LiteralPath $PolicyPath -PathType Leaf)){
   exit 42
 }
 
-$frame = Get-Content -LiteralPath $FrameJson -Raw | ConvertFrom-Json
-$policy = Get-Content -LiteralPath $PolicyPath -Raw | ConvertFrom-Json
+if((Get-Item -LiteralPath $FrameJson).Length -gt 65536){ Write-Host "VTP_POLICY_DENY:FRAME_TOO_LARGE"; exit 42 }
+try { $frame = Get-Content -LiteralPath $FrameJson -Raw | ConvertFrom-Json -ErrorAction Stop } catch { Write-Host "VTP_POLICY_DENY:FRAME_INVALID_JSON"; exit 42 }
+try { $policy = Get-Content -LiteralPath $PolicyPath -Raw | ConvertFrom-Json -ErrorAction Stop } catch { Write-Host "VTP_POLICY_DENY:POLICY_INVALID_JSON"; exit 42 }
+if($null -eq $frame -or $null -eq $policy){ Write-Host "VTP_POLICY_DENY:EMPTY_FRAME_OR_POLICY"; exit 42 }
 
 function Has-Value($obj,[string]$name){
   return ($null -ne $obj.PSObject.Properties[$name])
@@ -34,14 +36,15 @@ if((Has-Value $policy "require_payload_sha256") -and $policy.require_payload_sha
   }
 }
 
-$allowedNetworks = @($policy.allowed_networks)
-if($allowedNetworks.Count -gt 0 -and ($allowedNetworks -notcontains [string]$frame.network_id)){
+# An empty or missing allow-list allows nothing (fail closed), it does not allow everything.
+$allowedNetworks = @($(if(Has-Value $policy "allowed_networks"){ $policy.allowed_networks }) | Where-Object { $null -ne $_ })
+if($allowedNetworks -cnotcontains [string]$frame.network_id){
   Write-Host ("VTP_POLICY_DENY:NETWORK_NOT_ALLOWED:" + [string]$frame.network_id)
   exit 42
 }
 
-$allowedRecipients = @($policy.allowed_recipient_nodes)
-if($allowedRecipients.Count -gt 0 -and ($allowedRecipients -notcontains [string]$frame.recipient_node_id)){
+$allowedRecipients = @($(if(Has-Value $policy "allowed_recipient_nodes"){ $policy.allowed_recipient_nodes }) | Where-Object { $null -ne $_ })
+if($allowedRecipients -cnotcontains [string]$frame.recipient_node_id){
   Write-Host ("VTP_POLICY_DENY:RECIPIENT_NOT_ALLOWED:" + [string]$frame.recipient_node_id)
   exit 42
 }

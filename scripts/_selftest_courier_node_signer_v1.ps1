@@ -113,5 +113,7 @@ $m = CC-ReadJsonFile $msg
 Must (Test-Path -LiteralPath (Join-Path $Sandbox ("runtime\product_messages\inbox\node-beta\" + [string]$m.message_id + "\payload.bin")) -PathType Leaf) "INBOX"
 $Cases++; Write-Host "COURIER_NODE_SIGNER_CASE_OK: delivery signed by the NeverLost principal -> verified and received"
 
+# Private keys copied or made for the sandbox do not outlive the run.
+Remove-Item -LiteralPath (Join-Path $Sandbox "proofs\keys") -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host ("COURIER_NODE_SIGNER_SELFTEST_CASES: " + $Cases)
 Write-Host "COURIER_NODE_SIGNER_SELFTEST_OK"

@@ -103,9 +103,10 @@ foreach($item in $items){
   $dest = Join-Path $DestinationDropRoot $frameName
 
   try {
-    if(Test-Path -LiteralPath $dest){
-      Remove-Item -LiteralPath $dest -Recurse -Force
-    }
+    # Never delete through a destination (it may be a link, or another sender's frame): a frame that
+    # is already there is a duplicate and is not delivered again.
+    if(Test-Path -LiteralPath $dest){ throw "VTP_OUTBOX_DESTINATION_EXISTS" }
+    if(((Get-Item -LiteralPath $frameSource -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){ throw "VTP_OUTBOX_SOURCE_IS_LINK" }
 
     Copy-Item -LiteralPath $frameSource -Destination $dest -Recurse -Force
 

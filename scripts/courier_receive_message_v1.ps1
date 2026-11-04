@@ -13,9 +13,11 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "_lib_covenant_courier_product_v1.ps1")
 . (Join-Path $PSScriptRoot "_lib_courier_vtp2_v1.ps1")
+. (Join-Path $PSScriptRoot "_lib_courier_policy_eval_v1.ps1")
 
 $RepoRoot = (Resolve-Path $RepoRoot).Path
-$Vtp = Join-Path $RepoRoot "vtp.ps1"
+# Code comes from this installation, never from the data root.
+$Vtp = Join-Path (Split-Path -Parent $PSScriptRoot) "vtp.ps1"
 $ReceiptRoot = Join-Path $RepoRoot "proofs\receipts"
 $ProductReceipt = Join-Path $ReceiptRoot "covenant_courier_product.ndjson"
 $ChainPath = Join-Path $ReceiptRoot "covenant_courier_product.chain.ndjson"
@@ -56,6 +58,10 @@ function Write-Receipt([string]$MessageId,[string]$FrameId,[string]$PayloadSha,[
   Write-Host ("COURIER_RECEIVE_PRODUCT_RECEIPT_SHA256: " + (CC-Sha256Text $line))
 }
 
+# The log decides the target and the replay set: verify its chain before using it.
+$chk = Run-Child (Join-Path $PSScriptRoot "courier_receipt_chain_v1.ps1") @("-RepoRoot",$RepoRoot,"-ReceiptPath",$ProductReceipt,"-ChainPath",$ChainPath,"-VerifyOnly")
+if($chk -notmatch 'COVENANT_COURIER_RECEIPT_CHAIN_UNCHAINED: 0\b'){ throw "COURIER_RECEIVE_FAIL:RECEIPT_LOG_HAS_UNCHAINED_LINES" }
+
 $receipts = New-Object System.Collections.Generic.List[object]
 foreach($line in @(Get-Content -LiteralPath $ProductReceipt -ErrorAction Stop)){
   if([string]::IsNullOrWhiteSpace($line)){ continue }
@@ -63,7 +69,7 @@ foreach($line in @(Get-Content -LiteralPath $ProductReceipt -ErrorAction Stop)){
 }
 
 $settled = New-Object 'System.Collections.Generic.HashSet[string]'
-$acceptedMessages = New-Object 'System.Collections.Generic.HashSet[string]'
+$acceptedMessages = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
 foreach($r in $receipts){
   $d = $(if(CC-HasProp $r "decision"){ [string]$r.decision } else { "" })
   $f = $(if(CC-HasProp $r "frame_id"){ [string]$r.frame_id } else { "" })
@@ -186,6 +192,23 @@ try {
   if(@("allow","redact_notification") -cnotcontains [string]$pd.decision){ throw "POLICY_DECISION_NOT_DELIVERABLE" }
   $n = $envelope.notification
   if([string]$n.schema -cne "covenant_courier.notification.v1" -or [string]$n.message_id -cne $messageId){ throw "NOTIFICATION_BINDING_MISMATCH" }
+
+  # The sender's policy_decision is its claim, not this node's decision: re-decide with this node's own
+  # policy (the profile the session names, else the message's) on the bytes actually received, and build
+  # the notification from that profile. Covenant Gate is not re-consulted here (see SECURITY.md).
+  $rpPath = Join-Path $RepoRoot "policy\courier_product_policy_v1.json"
+  if(-not (Test-Path -LiteralPath $rpPath -PathType Leaf)){ throw "RECEIVER_POLICY_MISSING" }
+  $rp = CC-ReadJsonFile $rpPath
+  $sessPath = Join-Path $RepoRoot ("registry\sessions\" + [string]$m.session_id + ".json")
+  $sess = $(if(Test-Path -LiteralPath $sessPath -PathType Leaf){ CC-ReadJsonFile $sessPath } else { $null })
+  $pn = CCP-ResolveProfileName $m $sess
+  if(-not ((CC-HasProp $rp "profiles") -and (CC-HasProp $rp.profiles $pn))){ throw "RECEIVER_POLICY_PROFILE_UNKNOWN" }
+  $rprof = $rp.profiles.$pn
+  $org = $(if(CC-HasProp $m "organization_id"){ [string]$m.organization_id } else { "" })
+  $again = CCP-EvaluateLocal -RepoRoot $RepoRoot -Profile $rprof -PayloadBytes $payloadBytes -RecipientNodeId $NodeId -Fields @([string]$m.notification_preview,[string]$m.sender_identity,[string]$m.recipient_identity,$org)
+  if(@("allow","redact_notification") -cnotcontains $again.Decision){ throw ("RECEIVER_POLICY_" + $again.Decision.ToUpperInvariant() + ":" + $again.Reason) }
+  $rMode = $(if($again.Decision -ceq "redact_notification" -or [string]$pd.decision -ceq "redact_notification"){ "redacted" } else { [string]$rprof.notification_display_mode })
+  $receiverNotification = CCP-BuildNotification $messageId ([string]$m.recipient_identity) $rMode ([string]$m.notification_preview)
 } catch {
   $verdict = ([string]$_.Exception.Message -replace '[^A-Za-z0-9_:]','_')
 }
@@ -195,12 +218,20 @@ if($null -ne $verdict){
   throw ("COURIER_RECEIVE_FAIL:DELIVERY_ENVELOPE_INVALID:" + $verdict)
 }
 
-$inbox = Join-Path $RepoRoot ("runtime\product_messages\inbox\" + $NodeId + "\" + $messageId)
-CC-EnsureDir $inbox
+$inboxParent = Join-Path $RepoRoot ("runtime\product_messages\inbox\" + $NodeId)
+CC-EnsureDir $inboxParent
+$inbox = Join-Path $inboxParent $messageId
+# A delivered message is never overwritten: an existing inbox entry (same id, in any letter case on a
+# case-insensitive file system) is a replay.
+if(Test-Path -LiteralPath $inbox){
+  Write-Receipt $messageId $frameId $payloadSha "rejected" "DELIVERY_ENVELOPE_INVALID:MESSAGE_ALREADY_IN_INBOX" "covenant_courier.product.receive_reject.v1"
+  throw "COURIER_RECEIVE_FAIL:DELIVERY_ENVELOPE_INVALID:MESSAGE_ALREADY_IN_INBOX"
+}
+[void][IO.Directory]::CreateDirectory($inbox)
 [IO.File]::WriteAllBytes((Join-Path $inbox "payload.bin"),$payloadBytes)
 [void](CC-WriteDocument (Join-Path $inbox "message.json") (CC-ToOrderedTree $envelope.message))
 [void](CC-WriteDocument (Join-Path $inbox "policy_decision.json") (CC-ToOrderedTree $envelope.policy_decision))
-[void](CC-WriteDocument (Join-Path $inbox "notification.json") (CC-ToOrderedTree $envelope.notification))
+[void](CC-WriteDocument (Join-Path $inbox "notification.json") $receiverNotification)
 
 Write-Receipt $messageId $frameId $payloadSha "accepted" "VTP_POLICY_ALLOW" "covenant_courier.product.accept.v1"
 

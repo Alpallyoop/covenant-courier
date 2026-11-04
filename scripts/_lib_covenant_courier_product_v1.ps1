@@ -135,7 +135,12 @@ function CC-AppendLine([string]$Path,[string]$Line){
   $dir = Split-Path -Parent $Path
   if($dir){ CC-EnsureDir $dir }
   $bytes = (CC-Utf8NoBom).GetBytes($Line + "`n")
-  $fs = [System.IO.File]::Open($Path,[System.IO.FileMode]::Append,[System.IO.FileAccess]::Write,[System.IO.FileShare]::Read)
+  # Exclusive while appending (two writers never interleave or lose a line); retried briefly.
+  $fs = $null
+  for($i = 0; $null -eq $fs; $i++){
+    try { $fs = [System.IO.File]::Open($Path,[System.IO.FileMode]::Append,[System.IO.FileAccess]::Write,[System.IO.FileShare]::None) }
+    catch [System.IO.IOException] { if($i -ge 100){ CC-Fail "CC_APPEND_FAIL:LOCKED" }; Start-Sleep -Milliseconds 50 }
+  }
   try { $fs.Write($bytes,0,$bytes.Length); $fs.Flush($true) } finally { $fs.Dispose() }
 }
 

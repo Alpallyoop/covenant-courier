@@ -18,8 +18,23 @@ function Get-VtpWireKeyEnvelopePath {
   $root = (Resolve-Path $RepoRoot).Path
   $dir = Join-Path $root "runtime\wire_keys"
   if(-not (Test-Path -LiteralPath $dir)){ [void][IO.Directory]::CreateDirectory($dir) }
-  $safe = ($SessionId + "." + $SenderNodeId + "." + $RecipientNodeId) -replace "[^A-Za-z0-9_.-]","_"
+  foreach($id in @($SessionId,$SenderNodeId,$RecipientNodeId)){ if($id -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\z' -or $id.Contains("..")){ throw "VTP_WIRE_KEY_FAIL:BAD_ID" } }
+  $safe = ($SessionId + "." + $SenderNodeId + "." + $RecipientNodeId)
   return (Join-Path $dir ($safe + ".keyenv.json"))
+}
+
+function Protect-VtpWireKeyFile([string]$Path){
+  if($env:OS -eq "Windows_NT"){
+    $acl = New-Object System.Security.AccessControl.FileSecurity
+    $acl.SetAccessRuleProtection($true,$false)
+    $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    $acl.SetOwner($me)
+    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($me,"FullControl","Allow")))
+    Set-Acl -LiteralPath $Path -AclObject $acl
+  } else {
+    & chmod 600 $Path
+    if($LASTEXITCODE -ne 0){ throw "VTP_WIRE_KEY_FAIL:CHMOD" }
+  }
 }
 
 function New-VtpRandomBytes {
@@ -56,6 +71,10 @@ function Ensure-VtpWireKeyEnvelope {
   $obj.aes_key_b64 = [Convert]::ToBase64String((New-VtpRandomBytes 32))
   $obj.hmac_key_b64 = [Convert]::ToBase64String((New-VtpRandomBytes 32))
   $json = $obj | ConvertTo-Json -Depth 20 -Compress
+  # Key material: the file is created empty, made readable by this account only, then written.
+  $fs = [IO.File]::Open($path,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)
+  $fs.Dispose()
+  Protect-VtpWireKeyFile $path
   [IO.File]::WriteAllText($path, ($json + [string][char]10), [Text.UTF8Encoding]::new($false))
   return $path
 }

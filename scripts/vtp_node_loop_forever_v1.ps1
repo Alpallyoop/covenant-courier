@@ -9,7 +9,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = (Resolve-Path $RepoRoot).Path
-$Vtp = Join-Path $RepoRoot "vtp.ps1"
+$Vtp = Join-Path (Split-Path -Parent $PSScriptRoot) "vtp.ps1"
 $LogDir = Join-Path $RepoRoot "proofs\runtime_logs"
 $LogPath = Join-Path $LogDir ("vtp_node_loop_forever_" + $NodeId + ".log")
 

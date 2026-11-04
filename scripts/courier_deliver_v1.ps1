@@ -30,13 +30,17 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "_lib_covenant_courier_product_v1.ps1")
 . (Join-Path $PSScriptRoot "_lib_courier_covenant_gate_v1.ps1")
 . (Join-Path $PSScriptRoot "_lib_courier_vtp2_v1.ps1")
+. (Join-Path $PSScriptRoot "_lib_courier_policy_eval_v1.ps1")
 
 $RepoRoot = (Resolve-Path $RepoRoot).Path
 $MaxPayloadBytes = 786432
 $ReceiptLog = Join-Path $RepoRoot "proofs\receipts\covenant_courier_product.ndjson"
 if([string]::IsNullOrWhiteSpace($PolicyPath)){ $PolicyPath = Join-Path $RepoRoot "policy\courier_product_policy_v1.json" }
 
-$IdPattern = '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\z'
+# IDs become folder names: no trailing dot or space (Windows drops them, so "abc." would be "abc"),
+# no reserved device names. Folders are compared case-insensitively where the file system does.
+$IdPattern = '^[A-Za-z0-9][A-Za-z0-9._-]{0,126}[A-Za-z0-9_-]\z|^[A-Za-z0-9]\z'
+function Test-ReservedName([string]$Id){ return ($Id -match '^(?i:CON|PRN|AUX|NUL|COM[0-9]|LPT[0-9])(\..*)?\z') }
 
 function Write-ProductReceipt([string]$MessageId,[string]$FrameId,[string]$PayloadSha,[string]$Decision,$ReasonCode,[string]$EventType){
   $receipt = [ordered]@{
@@ -98,7 +102,7 @@ if($null -eq $inputError){
     CC-RequireExactProps $message @("schema","message_id","sender_identity","recipient_identity","sender_node_id","recipient_node_id","session_id","policy_profile","notification_preview","payload_sha256","created_utc") @("organization_id","origin") "MESSAGE"
     if([string]$message.schema -cne "covenant_courier.message.v1"){ throw "MESSAGE:BAD_SCHEMA" }
     foreach($f in @("message_id","sender_node_id","recipient_node_id","session_id","policy_profile")){
-      if(([string]$message.$f) -cnotmatch $IdPattern -or ([string]$message.$f).Contains("..")){ throw ("MESSAGE:BAD_" + $f.ToUpperInvariant()) }
+      if(([string]$message.$f) -cnotmatch $IdPattern -or ([string]$message.$f).Contains("..") -or (Test-ReservedName ([string]$message.$f))){ throw ("MESSAGE:BAD_" + $f.ToUpperInvariant()) }
     }
     foreach($f in @("sender_identity","recipient_identity")){ if([string]::IsNullOrWhiteSpace([string]$message.$f)){ throw ("MESSAGE:EMPTY_" + $f.ToUpperInvariant()) } }
     if($null -eq $message.notification_preview -or $message.notification_preview -isnot [string]){ throw "MESSAGE:BAD_NOTIFICATION_PREVIEW" }
@@ -119,7 +123,8 @@ if($null -ne $inputError){
   Finish "rejected" ("MESSAGE_INVALID:" + $inputError) 42
 }
 
-[System.IO.File]::Copy($MessagePath,(Join-Path $OutDir "message.json"),$true)
+# The parsed message, not a re-read of the caller's file (what is kept is what was checked).
+[void](CC-WriteDocument (Join-Path $OutDir "message.json") (CC-ToOrderedTree $message))
 Write-Host ("COVENANT_COURIER_DELIVER_MESSAGE_ID: " + $messageId)
 
 # ---------------------------------------------------------------- 2. policy
@@ -127,6 +132,10 @@ $profileName = [string]$message.policy_profile
 $profile = $null
 $policyHash = $null
 try {
+  # The policy is this installation's own: a file under <repo>\policy\, never one the caller brings.
+  $policyDir = [IO.Path]::GetFullPath((Join-Path $RepoRoot "policy")).TrimEnd('\','/') + [IO.Path]::DirectorySeparatorChar
+  $cmp = $(if($env:OS -eq "Windows_NT"){ [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal })
+  if(-not [IO.Path]::GetFullPath($PolicyPath).StartsWith($policyDir,$cmp)){ throw "POLICY_PATH_NOT_IN_REPOSITORY" }
   $policy = CC-ReadJsonFile $PolicyPath
   if([string]$policy.schema -cne "covenant_courier.product_policy.v1"){ throw "POLICY_BAD_SCHEMA" }
   $policyHash = CC-Sha256File $PolicyPath
@@ -168,41 +177,26 @@ if($null -eq $profile){
     $session = CC-ReadJsonFile $sessionPath
     $senderNode = CC-ReadJsonFile $senderNodePath
     $recipientNode = CC-ReadJsonFile $recipientNodePath
+    $sessionProfile = $(if((CC-HasProp $session "session_policy_ref") -and -not [string]::IsNullOrWhiteSpace([string]$session.session_policy_ref)){ [string]$session.session_policy_ref } else { $null })
     if([string]$session.status -cne "open"){ Decide "reject" "SESSION_NOT_OPEN" }
     elseif([string]$session.sender_node_id -cne [string]$message.sender_node_id -or [string]$session.recipient_node_id -cne [string]$message.recipient_node_id){ Decide "reject" "SESSION_BINDING_MISMATCH" }
+    elseif($null -ne $sessionProfile -and $sessionProfile -cne $profileName){ Decide "reject" "POLICY_PROFILE_NOT_SESSION_PROFILE" }
     elseif([string]$senderNode.status -cne "active" -or [string]$recipientNode.status -cne "active"){ Decide "reject" "NODE_INACTIVE" }
     elseif([string]::IsNullOrWhiteSpace([string]$senderNode.principal) -or [string]::IsNullOrWhiteSpace([string]$recipientNode.principal)){ Decide "reject" "NODE_PRINCIPAL_MISSING" }
-    elseif($payloadTooLarge -or $payloadBytes.Length -gt [int64]$profile.max_payload_bytes){ Decide "reject" "PAYLOAD_TOO_LARGE" }
     else {
-      try { $text = (New-Object System.Text.UTF8Encoding($false,$true)).GetString($payloadBytes) } catch { $text = $null }
-      if($null -eq $text -and [bool]$profile.require_utf8_payload){ Decide "reject" "PAYLOAD_NOT_UTF8" }
-      else {
-        # Restricted terms (whole words, case-insensitive) in the payload text and the preview.
-        $hits = New-Object System.Collections.Generic.List[string]
-        if($null -ne $profile.restricted_dictionary){
-          $dictPath = Join-Path $RepoRoot ([string]$profile.restricted_dictionary)
-          $dict = CC-ReadJsonFile $dictPath
-          foreach($e in @($dict.entries)){
-            if([string]$e.sensitivity -ne "controlled"){ continue }
-            foreach($form in @($e.surface_forms)){
-              $rx = '(?i)(?<![\p{L}\p{N}])' + [regex]::Escape([string]$form) + '(?![\p{L}\p{N}])'
-              if((($null -ne $text) -and [regex]::IsMatch($text,$rx)) -or [regex]::IsMatch([string]$message.notification_preview,$rx)){ $hits.Add([string]$e.token); break }
-            }
-          }
-        }
-        if($hits.Count -gt 0){
-          switch([string]$profile.restricted_action){
-            "reject" { Decide "reject" "RESTRICTED_TERM" }
-            "quarantine" { Decide "quarantine" "RESTRICTED_TERM" }
-            "require_approval" { Decide "require_approval" "RESTRICTED_TERM" }
-            "redact_notification" { Decide "redact_notification" "RESTRICTED_TERM_NOTIFICATION_REDACTED" }
-            default { Decide "reject" "POLICY_PROFILE_BAD_RESTRICTED_ACTION" }
-          }
-        }
+      # Recipient allow-list, size, text and restricted terms (also in the preview and the identities
+      # the recipient sees): the same evaluation the receiver repeats with its own policy.
+      $orgField = $(if(CC-HasProp $message "organization_id"){ [string]$message.organization_id } else { "" })
+      $local = CCP-EvaluateLocal -RepoRoot $RepoRoot -Profile $profile -PayloadBytes $payloadBytes -RecipientNodeId ([string]$message.recipient_node_id) -Fields @([string]$message.notification_preview,[string]$message.sender_identity,[string]$message.recipient_identity,$orgField) -PayloadTooLarge:$payloadTooLarge
+      Decide $local.Decision $local.Reason
+      if($true){
         # Covenant Gate (only when the profile asks; never on an already-refused delivery).
         $gateMode = [string]$profile.covenant_gate
         if(@("allow","redact_notification") -contains $decision -and $gateMode -ne "off"){
           $signer = $(if(CC-HasProp $profile "covenant_gate_signer"){ [string]$profile.covenant_gate_signer } else { "" })
+          # The gate's decision must come from someone other than the sender: a node principal never
+          # signs its own gate decision.
+          if(-not [string]::IsNullOrWhiteSpace($signer) -and ($signer -ceq [string]$senderNode.principal -or $signer -ceq [string]$recipientNode.principal)){ throw "POLICY_PROFILE_GATE_SIGNER_IS_A_NODE" }
           $cg = Invoke-CourierCovenantGate -RepoRoot $RepoRoot -Message $message -PayloadSha256 $actualPayloadSha -SenderPrincipal ([string]$senderNode.principal) -RecipientPrincipal ([string]$recipientNode.principal) -WorkDir (Join-Path $OutDir "covenant_gate") -CovenantGateRoot $CovenantGateRoot -DecisionDocumentPath $CovenantGateDecisionPath -DocumentSigner $signer
           Write-Host ("COVENANT_COURIER_DELIVER_COVENANT_GATE: mode=" + $cg.Mode + " outcome=" + $cg.Outcome + " decision=" + $cg.Decision + " token=" + $cg.Token)
           if($cg.Consulted -and $cg.Decision -eq "deny"){ Decide "reject" ("COVENANT_GATE_DENY:" + ((@($cg.ReasonCodes) -join ",") -replace '[^A-Z0-9_,]','_')) }
@@ -250,20 +244,7 @@ $decisionDoc = [ordered]@{
   policy_profile = $profileName
   decided_utc = (CC-UtcNow)
 }
-$preview = switch($displayMode){
-  "full_safe" { [string]$message.notification_preview }
-  "redacted" { "[redacted]" }
-  "generic" { "New secure message" }
-  default { "" }
-}
-$notification = [ordered]@{
-  schema = "covenant_courier.notification.v1"
-  message_id = $messageId
-  recipient_identity = [string]$message.recipient_identity
-  display_mode = $displayMode
-  preview = $preview
-  created_utc = (CC-UtcNow)
-}
+$notification = CCP-BuildNotification $messageId ([string]$message.recipient_identity) $displayMode ([string]$message.notification_preview)
 [void](CC-WriteDocument (Join-Path $OutDir "policy_decision.json") $decisionDoc)
 [void](CC-WriteDocument (Join-Path $OutDir "notification.json") $notification)
 Write-Host ("COVENANT_COURIER_DELIVER_POLICY: " + $decision + ":" + $reason)
@@ -277,7 +258,8 @@ if(@("quarantine","require_approval","require_stronger_session") -contains $deci
   $q = Join-Path $RepoRoot ("runtime\product_messages\quarantine\" + $messageId)
   CC-EnsureDir $q
   foreach($n in @("message.json","policy_decision.json","notification.json")){ Copy-Item -LiteralPath (Join-Path $OutDir $n) -Destination (Join-Path $q $n) -Force }
-  [System.IO.File]::Copy($PayloadPath,(Join-Path $q "payload.bin"),$true)
+  # The bytes that were evaluated (no re-read of the caller's file).
+  [System.IO.File]::WriteAllBytes((Join-Path $q "payload.bin"),[byte[]]$payloadBytes)
   [void](Write-ProductReceipt $messageId "no-frame" $actualPayloadSha "quarantined" ($decision.ToUpperInvariant() + ":" + $reason) "covenant_courier.product.quarantine.v1")
   Finish "quarantined" $reason 42
 }
@@ -290,6 +272,9 @@ try {
     policy_decision = $decisionDoc
     notification = $notification
   }
+  # The sender's free-text preview travels only when the recipient is meant to see it (full_safe): a
+  # redacted, generic or minimal notification must not leave it readable in the envelope.
+  if($displayMode -cne "full_safe"){ $envelope.message["notification_preview"] = "" }
   if($null -ne $vtp2Binding){
     # The sender's free-text preview is not part of the encrypted payload: it is not carried at all
     # (the recipient sees the notification document, built from the profile's display mode).

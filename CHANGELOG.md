@@ -1,5 +1,53 @@
 # Changelog
 
+## Unreleased (2026-11-04) - security audit
+
+### Security
+
+- Receive re-decides delivery with the receiver's own policy (recipient allow-list, size, text, restricted
+  terms) under the session's profile, and builds the inbox notification from that profile; the sender's
+  `policy_decision` and `notification` are no longer trusted (`RECEIVER_POLICY_<decision>:<reason>`). Shared
+  evaluation in `scripts/_lib_courier_policy_eval_v1.ps1`.
+- Restricted terms are matched on folded text (NFKD, Cf/Mn/Me removed, NFC, lower case) in payload (UTF-8 and
+  UTF-16), preview, identities and organization; a non-text payload under a dictionary is never allowed
+  (`PAYLOAD_NOT_SCANNABLE`).
+- `deliver -PolicyPath` only accepts files under `<repo>/policy/` (`POLICY_PATH_NOT_IN_REPOSITORY`); a session
+  opened with `-SessionPolicyRef` fixes the profile (`POLICY_PROFILE_NOT_SESSION_PROFILE`); a Covenant Gate
+  decision signer may not be a node principal (`POLICY_PROFILE_GATE_SIGNER_IS_A_NODE`).
+- Covenant Gate invoke mode runs only a checkout pinned with the new `courier.ps1 cg-pin`
+  (`scripts/courier_covenant_gate_pin_v1.ps1`, `proofs/trust/covenant_gate_pin.json`): unpinned roots are not
+  run (`COVENANT_GATE_ROOT_NOT_PINNED`, unavailable), changed pinned files are refused
+  (`COVENANT_GATE_PIN_MISMATCH`); the hash-checked bytes are what runs.
+- Sessions are never reopened or rebound (`COURIER_SESSION_FAIL:SESSION_CLOSED` /
+  `SESSION_EXISTS_WITH_OTHER_BINDING`); opening an open session again is a no-op.
+- Signature verifier: release signers only with `-IncludeReleaseSigners`; identity/namespace allow-list (no
+  ssh-keygen argument injection); links and >4 MB inputs refused; verifies staged bytes read once and prints
+  `COURIER_SIGNATURE_VERIFIED_SHA256`.
+- Transport listener: strict `message_rel` / `signature_rel`, no links, size limits, verifier called with an
+  argument array, verified-bytes hash must match, re-hash after the move, per-node accepted-payload index
+  (re-framed replays refused). The policy loop hands allowed frames to `runtime/nodes/<node>/approved/`; rejected
+  and duplicate frames are kept, never deleted through; the outbox never deletes a destination.
+- VTP peer pin computes the fingerprint from the key, validates principal and key, writes
+  `namespaces="courier/message"`, and refuses a second key for a pinned principal; invite and m2m imports refuse
+  `..` and non-plain names. The local bootstrap signer is limited to `courier/message` and no longer rewrites
+  other principals' lines.
+- Receive verifies the product receipt chain before using the log (`RECEIPT_LOG_HAS_UNCHAINED_LINES`), creates
+  each inbox entry once (`MESSAGE_ALREADY_IN_INBOX`), compares message ids case-insensitively; receipt appends
+  are exclusive.
+- Child scripts run from the installation (`$PSScriptRoot`), never from `-RepoRoot` or the current folder.
+- Redacted, generic and minimal notifications no longer leave the sender's preview in the envelope; quarantine
+  stores the evaluated bytes; IDs refuse a trailing dot and reserved device names; register-node validates id,
+  principal and namespaces.
+- UDP ingest binds 127.0.0.1 by default, ignores stray datagrams, checks IV/tag lengths; the wire key envelope
+  is created owner-only; `vtp_udp_wire_listen_once_v1.ps1` (unused, unvalidated) removed; the VTP policy gate
+  fails closed on empty allow-lists or unreadable JSON.
+
+### Tests
+
+- New `_selftest_courier_receive_policy_v1.ps1` (forged allow, forged notification, re-framed replay, unchained
+  log) and more cases in the deliver, trust-pin and registry self-tests; self-tests no longer close the demo
+  session, pin into the repository's trust roots, or leave private key copies in sandboxes.
+
 ## Unreleased (2026-11-01) - VTP v2 payload encryption, message origin
 
 ### Added

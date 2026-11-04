@@ -43,15 +43,26 @@ $r = Child (Join-Path $PSScriptRoot "courier_open_session_v1.ps1") @("-RepoRoot"
 $r = Child (Join-Path $PSScriptRoot "courier_open_session_v1.ps1") @("-RepoRoot",$Sandbox,"-SessionId","session-closed-001","-SenderNodeId","node-alpha","-RecipientNodeId","node-beta","-NetworkId","courier-internal-net-v1","-SessionRole","message-delivery"); Must ($r.Code -eq 0) "OPEN_SESSION_2"
 $r = Child (Join-Path $PSScriptRoot "courier_close_session_v1.ps1") @("-RepoRoot",$Sandbox,"-SessionId","session-closed-001"); Must ($r.Code -eq 0) "CLOSE_SESSION"
 
-# Test policy: the confidential profile names the Covenant Gate decision signer.
+# A Covenant Gate decision signer of its own (never a node principal), trusted for covenant-gate/decision only.
+$GateSigner = "covenant-gate-selftest@local"
+$gk = Join-Path $Sandbox "proofs\keys\courier_covenant-gate-selftest_local_ed25519"
+$kgExe = $(if($env:WINDIR -and (Test-Path -LiteralPath (Join-Path $env:WINDIR "System32\OpenSSH\ssh-keygen.exe"))){ Join-Path $env:WINDIR "System32\OpenSSH\ssh-keygen.exe" } else { (Get-Command ssh-keygen -ErrorAction Stop).Source })
+$kp = Start-Process -FilePath $kgExe -ArgumentList ('-q -t ed25519 -N "" -C "gate" -f "' + $gk + '"') -Wait -PassThru -NoNewWindow
+Must ($kp.ExitCode -eq 0) "GATE_KEYGEN"
+CC-RestrictPrivateKey $gk
+$gpub = @(([IO.File]::ReadAllText($gk + ".pub")).Trim() -split ' ')
+[IO.File]::AppendAllText((Join-Path $Sandbox "proofs\trust\allowed_signers"),("`n" + $GateSigner + ' namespaces="covenant-gate/decision" ' + $gpub[0] + " " + $gpub[1] + "`n"))
+
+# Test policy (inside the sandbox's policy folder: deliver refuses a policy file from anywhere else):
+# the confidential profile names the Covenant Gate decision signer.
 $pol = CC-ReadJsonFile (Join-Path $Sandbox "policy\courier_product_policy_v1.json")
-$pol.profiles.confidential | Add-Member -NotePropertyName "covenant_gate_signer" -NotePropertyValue "courier-local@covenant"
+$pol.profiles.confidential | Add-Member -NotePropertyName "covenant_gate_signer" -NotePropertyValue $GateSigner
 # Gate cases test the gate alone; VTP v2 payload encryption is tested through its own "sealed" profile.
 $pol.profiles.confidential.payload_encryption = "none"
 $sealed = CC-ParseJson (CC-ToCanonicalJson $pol.profiles.default)
 $sealed.payload_encryption = "vtp2"
 $pol.profiles | Add-Member -NotePropertyName "sealed" -NotePropertyValue $sealed
-$TestPolicy = Join-Path $Run "policy.test.json"
+$TestPolicy = Join-Path $Sandbox "policy\policy.test.json"
 [void](CC-WriteDocument $TestPolicy (CC-ToOrderedTree $pol))
 
 $n = 0
@@ -77,7 +88,8 @@ function New-Case([string]$Profile,[string]$Text,[hashtable]$Override = @{},[str
 function Deliver($Case,[string[]]$Extra = @(),[string]$Root = $Sandbox){
   $out = Join-Path $Case.Dir "out"
   $a = @("-RepoRoot",$Root,"-MessagePath",$Case.Message,"-PayloadPath",$Case.Payload,"-OutDir",$out)
-  if(@($Extra) -notcontains "-PolicyPath"){ $a += @("-PolicyPath",$TestPolicy) }
+  # The sandbox uses the test policy; the real repository its own policy (deliver takes no other).
+  if(@($Extra) -notcontains "-PolicyPath" -and $Root -eq $Sandbox){ $a += @("-PolicyPath",$TestPolicy) }
   $a += $Extra
   $res = Child $Deliver $a
   $receipt = $null
@@ -113,6 +125,7 @@ $c = New-Case "public" "a rose by any other name"
 $res = Deliver $c
 Expect $res 0 "sent" "RESTRICTED_TERM_NOTIFICATION_REDACTED" "redact-notification"
 $nt = CC-ReadJsonFile (Join-Path $res.Out "notification.json"); Must ([string]$nt.display_mode -eq "redacted" -and [string]$nt.preview -eq "[redacted]") "NOTIFICATION_REDACTED"
+$envR = CC-ReadJsonFile (Join-Path $res.Out "delivery.json"); Must ([string]$envR.message.notification_preview -eq "") "REDACTED_PREVIEW_NOT_IN_ENVELOPE"
 
 $c = New-Case "default" ""
 Expect (Deliver $c) 0 "sent" "POLICY_ALLOW" "empty-payload"
@@ -156,12 +169,53 @@ Expect (Deliver $c) 42 "rejected" "RESTRICTED_TERM" "restricted-term-reject"
 
 $badPol = CC-ReadJsonFile $TestPolicy
 $badPol.profiles.default.covenant_gate = "requried"
-$BadPolicy = Join-Path $Run "policy.bad.json"
+$BadPolicy = Join-Path $Sandbox "policy\policy.bad.json"
 [void](CC-WriteDocument $BadPolicy (CC-ToOrderedTree $badPol))
 $c = New-Case "default" "x"
 $res = Child $Deliver @("-RepoRoot",$Sandbox,"-MessagePath",$c.Message,"-PayloadPath",$c.Payload,"-OutDir",(Join-Path $c.Dir "out"),"-PolicyPath",$BadPolicy)
 $res.Receipt = CC-ReadJsonFile (Join-Path $c.Dir "out\product_receipt.json")
 Expect $res 1 "failed" "COURIER_POLICY_FAILED:POLICY_PROFILE_BAD_COVENANT_GATE" "misspelled-gate-mode-fails-closed"
+
+# A policy file from outside this installation's policy folder is never used.
+$OutsidePolicy = Join-Path $Run "policy.outside.json"
+Copy-Item -LiteralPath $TestPolicy -Destination $OutsidePolicy
+$c = New-Case "default" "x"
+Expect (Deliver $c @("-PolicyPath",$OutsidePolicy)) 1 "failed" "COURIER_POLICY_FAILED:POLICY_PATH_NOT_IN_REPOSITORY" "policy-path-outside-repository"
+
+# A gate signer that is a node principal could sign its own gate decision: refused.
+$selfPol = CC-ReadJsonFile $TestPolicy
+$selfPol.profiles.confidential.covenant_gate_signer = "courier-local@covenant"
+$SelfPolicy = Join-Path $Sandbox "policy\policy.selfsigner.json"
+[void](CC-WriteDocument $SelfPolicy (CC-ToOrderedTree $selfPol))
+$c = New-Case "confidential" "board minutes"
+Expect (Deliver $c @("-PolicyPath",$SelfPolicy)) 1 "failed" "COURIER_POLICY_FAILED:POLICY_PROFILE_GATE_SIGNER_IS_A_NODE" "gate-signer-is-a-node"
+
+# Restricted terms survive folding: format characters, compatibility forms, combining marks, UTF-16
+# text; bytes that are not text are never passed as allowed when a dictionary applies.
+function Set-Bytes($Case,[byte[]]$B){
+  [IO.File]::WriteAllBytes($Case.Payload,$B)
+  $m = CC-ReadJsonFile $Case.Message; $m.payload_sha256 = (CC-Sha256Bytes $B)
+  [void](CC-WriteDocument $Case.Message (CC-ToOrderedTree $m))
+}
+foreach($v in @(@("soft-hyphen",("a r" + [char]0xAD + "ose here")),@("zero-width-joiner",("a ro" + [char]0x200D + "se here")),@("fullwidth",("a " + [char]0xFF52 + [char]0xFF4F + [char]0xFF53 + [char]0xFF45)),@("combining-mark",("a ro" + [char]0x301 + "se")))){
+  $c = New-Case "default" $v[1]
+  Expect (Deliver $c) 42 "quarantined" "QUARANTINE:RESTRICTED_TERM" ("restricted-term-folded-" + $v[0])
+}
+$c = New-Case "default" "x"; Set-Bytes $c ([Text.Encoding]::Unicode.GetBytes("a rose here"))
+Expect (Deliver $c) 42 "quarantined" "QUARANTINE:RESTRICTED_TERM" "restricted-term-utf16"
+$c = New-Case "default" "x"; Set-Bytes $c ((CC-Utf8NoBom).GetBytes("a rose here") + [byte[]]@(0xFF))
+Expect (Deliver $c) 42 "quarantined" "QUARANTINE:PAYLOAD_NOT_SCANNABLE" "payload-not-text-not-scanned"
+$c = New-Case "default" "x" @{ notification_preview = ("ro" + [char]0xAD + "se") }
+Expect (Deliver $c) 42 "quarantined" "QUARANTINE:RESTRICTED_TERM" "restricted-term-in-preview"
+
+# A session that names its profile decides it: the message cannot pick a weaker one.
+$r = Child (Join-Path $PSScriptRoot "courier_open_session_v1.ps1") @("-RepoRoot",$Sandbox,"-SessionId","session-pinned-001","-SenderNodeId","node-alpha","-RecipientNodeId","node-beta","-NetworkId","courier-internal-net-v1","-SessionRole","message-delivery","-SessionPolicyRef","confidential"); Must ($r.Code -eq 0) "OPEN_PINNED_SESSION"
+$c = New-Case "default" "x" @{ session_id = "session-pinned-001" }
+Expect (Deliver $c) 42 "rejected" "POLICY_PROFILE_NOT_SESSION_PROFILE" "session-profile-pinned"
+# A closed session is never reopened by opening it again.
+$r = Child (Join-Path $PSScriptRoot "courier_open_session_v1.ps1") @("-RepoRoot",$Sandbox,"-SessionId","session-closed-001","-SenderNodeId","node-alpha","-RecipientNodeId","node-beta","-NetworkId","courier-internal-net-v1","-SessionRole","message-delivery")
+Must ($r.Code -ne 0 -and $r.Text -match "COURIER_SESSION_FAIL:SESSION_CLOSED") "CLOSED_SESSION_NOT_REOPENED"
+$Cases++; Write-Host "COVENANT_COURIER_DELIVER_CASE_OK: closed-session-not-reopened -> COURIER_SESSION_FAIL:SESSION_CLOSED"
 
 # ---------------------------------------------------------------- Covenant Gate
 $cirPath = Join-Path $Sandbox "proofs\integration_receipts\covenant-courier__covenant-gate\receipts.ndjson"
@@ -190,7 +244,7 @@ function New-GateDoc($Case,[string]$Decision,[switch]$WrongInput,[switch]$NoSign
   $p = Join-Path $Case.Dir "cg.eval_output.json"
   CC-WriteTextFile $p ((CC-ToCanonicalJson $doc) + "`n")
   if(-not $NoSign){
-    $s = Child (Join-Path $PSScriptRoot "courier_sign_message_v1.ps1") @("-RepoRoot",$Sandbox,"-MessagePath",$p,"-SignerIdentity","courier-local@covenant","-Namespace","covenant-gate/decision")
+    $s = Child (Join-Path $PSScriptRoot "courier_sign_message_v1.ps1") @("-RepoRoot",$Sandbox,"-MessagePath",$p,"-SignerIdentity",$GateSigner,"-Namespace","covenant-gate/decision")
     Must ($s.Code -eq 0) "SIGN_GATE_DOC"
   }
   return $p
@@ -216,6 +270,22 @@ $t = [IO.File]::ReadAllText($doc).Replace('ALLOW_RULE_MATCHED','ALLOW_RULE_EDITE
 [IO.File]::WriteAllText($doc,$t)
 Expect (Deliver $c @("-CovenantGateDecisionPath",$doc)) 42 "rejected" "COVENANT_GATE_REFUSED:CG_DOCUMENT_SIGNATURE_INVALID" "gate-document-tampered"
 
+# Invoke mode runs only a pinned Covenant Gate checkout, and only while its files match the pin.
+$stub = Join-Path $Run "stub-covenant-gate"
+CC-EnsureDir (Join-Path $stub "scripts"); CC-EnsureDir (Join-Path $stub "policy")
+CC-WriteTextFile (Join-Path $stub "policy\canonical.base.v1.json") '{"schema":"covenantgate.policy.v1"}'
+CC-WriteTextFile (Join-Path $stub "scripts\_lib_covenantgate_eval_v1.ps1") @'
+function CG-EvalV1($Base,$Overlay,$In){ return [ordered]@{ decision = "allow" } }
+function CG-ToCanonJson($o){ return ($o | ConvertTo-Json -Compress) }
+'@
+$c = New-Case "confidential" "board minutes"
+Expect (Deliver $c @("-CovenantGateRoot",$stub)) 42 "quarantined" "REQUIRE_APPROVAL:COVENANT_GATE_REQUIRED:COVENANT_GATE_ROOT_NOT_PINNED" "gate-invoke-unpinned-root-not-run"
+$r = Child (Join-Path $PSScriptRoot "courier_covenant_gate_pin_v1.ps1") @("-RepoRoot",$Sandbox,"-CovenantGateRoot",$stub); Must ($r.Code -eq 0) ("PIN_STUB:" + $r.Text)
+Add-Content -LiteralPath (Join-Path $stub "scripts\_lib_covenantgate_eval_v1.ps1") -Value "# changed after pinning"
+$c = New-Case "confidential" "board minutes"
+Expect (Deliver $c @("-CovenantGateRoot",$stub)) 42 "rejected" "COVENANT_GATE_REFUSED:COVENANT_GATE_PIN_MISMATCH" "gate-invoke-pinned-files-changed"
+Remove-Item -LiteralPath (Join-Path $Sandbox "proofs\trust\covenant_gate_pin.json") -Force
+
 $v = Child (Join-Path $PSScriptRoot "courier_integration_receipts_v1.ps1") @("-RepoRoot",$Sandbox,"verify")
 Must ($v.Code -eq 0) ("CIR_CHAIN_VERIFY:" + $v.Text)
 
@@ -224,6 +294,7 @@ if(-not [string]::IsNullOrWhiteSpace($env:COVENANT_GATE_ROOT)){
   # carries allow.courier.deliver.human; ai and unspecified origins are always default-deny.
   $cgBase = Join-Path $env:COVENANT_GATE_ROOT "policy\canonical.base.v1.json"
   $hasRule = (Test-Path -LiteralPath $cgBase) -and ([IO.File]::ReadAllText($cgBase).Contains("allow.courier.deliver.human"))
+  $r = Child (Join-Path $PSScriptRoot "courier_covenant_gate_pin_v1.ps1") @("-RepoRoot",$Sandbox,"-CovenantGateRoot",$env:COVENANT_GATE_ROOT); Must ($r.Code -eq 0) ("PIN_REAL:" + $r.Text)
   foreach($o in @("human","ai","")){
     $ov = @{}; if($o -ne ""){ $ov = @{ origin = $o } }
     $c = New-Case "confidential" "board minutes" $ov
@@ -342,15 +413,17 @@ $r = Child (Join-Path $PSScriptRoot "courier_open_session_v1.ps1") @("-RepoRoot"
 # This sender's policy: confidential without encryption and without the gate (the gate is tested above).
 $polPlain = CC-ReadJsonFile $TestPolicy
 $polPlain.profiles.confidential.covenant_gate = "off"
-$TestPolicyPlainConf = Join-Path $Run "policy.plain-confidential.json"
+# (Deliver takes a policy only from the repository's policy folder: written there for this case, removed after.)
+$TestPolicyPlainConf = Join-Path $RepoRoot "policy\_selftest_plain_confidential.json"
 [void](CC-WriteDocument $TestPolicyPlainConf (CC-ToOrderedTree $polPlain))
 $c = New-Case "confidential" "confidential in plaintext" @{ session_id = $sidConf }
-$res = Deliver $c @("-PolicyPath",$TestPolicyPlainConf) $RepoRoot
+try { $res = Deliver $c @("-PolicyPath",$TestPolicyPlainConf) $RepoRoot } finally { Remove-Item -LiteralPath $TestPolicyPlainConf -Force -ErrorAction SilentlyContinue }
 Must ($res.Code -eq 0) ("REAL_CONFIDENTIAL_PLAIN_SEND:" + $res.Text)
 $r = Child (Join-Path $RepoRoot "courier.ps1") @("receive","-RepoRoot",$RepoRoot)
 Must ($r.Code -ne 0 -and $r.Text -match "VTP2_DOWNGRADE_REFUSED") ("PROFILE_DOWNGRADE_NOT_REFUSED:" + $r.Text)
 $Cases++; Write-Host "COVENANT_COURIER_DELIVER_CASE_OK: plaintext-for-vtp2-profile -> rejected:VTP2_DOWNGRADE_REFUSED"
-$c = New-Case "sealed" "end to end sealed payload" @{ session_id = $sid }
+# A bound session always carries the payload sealed, whatever the profile (here the real policy's default).
+$c = New-Case "default" "end to end sealed payload" @{ session_id = $sid }
 $res = Deliver $c @() $RepoRoot
 Must ($res.Code -eq 0) ("REAL_SEALED_SEND:" + $res.Text)
 $r = Child (Join-Path $RepoRoot "courier.ps1") @("receive","-RepoRoot",$RepoRoot)
@@ -359,5 +432,7 @@ $inbox = $null; foreach($l in ($r.Text -split "`n")){ if($l -match 'COURIER_RECE
 Must ([IO.File]::ReadAllText((Join-Path $inbox "payload.bin")) -eq "end to end sealed payload") "SEALED_INBOX_PAYLOAD"
 $Cases++; Write-Host "COVENANT_COURIER_DELIVER_CASE_OK: vtp2 sealed delivery -> decrypted and released to inbox"
 
+# Private keys copied or made for the sandbox do not outlive the run.
+Remove-Item -LiteralPath (Join-Path $Sandbox "proofs\keys") -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host ("COVENANT_COURIER_DELIVER_SELFTEST_CASES: " + $Cases)
 Write-Host "COVENANT_COURIER_DELIVER_SELFTEST_OK"

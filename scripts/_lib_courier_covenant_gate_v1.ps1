@@ -2,7 +2,8 @@
 #
 # Courier asks Covenant Gate for a decision on one delivery and verifies what comes back. Two modes:
 #
-#   invoke    COVENANT_GATE_ROOT (or -CovenantGateRoot) names a Covenant Gate checkout. Courier runs
+#   invoke    COVENANT_GATE_ROOT (or -CovenantGateRoot) names a Covenant Gate checkout, which must be the
+#             one pinned with courier.ps1 cg-pin (root and file hashes). Courier runs
 #             Covenant Gate's own sealed evaluator (scripts/_lib_covenantgate_eval_v1.ps1, CG-EvalV1)
 #             in a separate process against Covenant Gate's canonical base policy and overlay.
 #   document  The caller supplies a covenantgate.eval_output.v1 document plus a detached ssh signature
@@ -76,10 +77,20 @@ function CCG-Invoke([string]$RepoRoot,[string]$CovenantGateRoot,[string]$EvalInp
   if(-not (Test-Path -LiteralPath $lib -PathType Leaf) -or -not (Test-Path -LiteralPath $base -PathType Leaf)){
     return @{ Ok = $false; Token = "COVENANT_GATE_EVALUATOR_MISSING"; OutputPath = $null }
   }
+  # Only a pinned Covenant Gate checkout is run (courier.ps1 cg-pin): a root named by an environment
+  # variable or an argument alone is not trusted to execute as Courier. Unpinned = not reachable.
+  $pinPath = Join-Path $RepoRoot "proofs\trust\covenant_gate_pin.json"
+  if(-not (Test-Path -LiteralPath $pinPath -PathType Leaf)){ return @{ Ok = $false; Token = "COVENANT_GATE_ROOT_NOT_PINNED"; OutputPath = $null; Unpinned = $true } }
+  $pin = CC-ReadJsonFile $pinPath
+  $cmp = $(if($env:OS -eq "Windows_NT"){ [StringComparison]::OrdinalIgnoreCase } else { [StringComparison]::Ordinal })
+  $rootFull = (Resolve-Path -LiteralPath $CovenantGateRoot).Path
+  if([string]$pin.schema -cne "covenant_courier.covenant_gate_pin.v1" -or -not [string]::Equals([string]$pin.root,$rootFull,$cmp)){ return @{ Ok = $false; Token = "COVENANT_GATE_ROOT_NOT_PINNED"; OutputPath = $null; Unpinned = $true } }
+  $ovSha = $(if($null -eq $pin.overlay_sha256){ "none" } else { [string]$pin.overlay_sha256 })
   $runner = Join-Path $PSScriptRoot "courier_covenant_gate_invoke_v1.ps1"
-  $eapPrev = $ErrorActionPreference; $ErrorActionPreference = "Continue"; $log = & (CC-HostExe) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $runner -CovenantGateRoot $CovenantGateRoot -EvalInputPath $EvalInputPath -OutPath $OutPath 2>&1; $ErrorActionPreference = $eapPrev
+  $eapPrev = $ErrorActionPreference; $ErrorActionPreference = "Continue"; $log = & (CC-HostExe) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $runner -CovenantGateRoot $rootFull -EvalInputPath $EvalInputPath -OutPath $OutPath -EvaluatorSha256 ([string]$pin.evaluator_sha256) -BasePolicySha256 ([string]$pin.base_policy_sha256) -OverlaySha256 $ovSha 2>&1; $ErrorActionPreference = $eapPrev
   $code = $LASTEXITCODE
   CC-WriteTextFile ($OutPath + ".log.txt") (($log | Out-String))
+  if($code -eq 3){ return @{ Ok = $false; Token = "COVENANT_GATE_PIN_MISMATCH"; OutputPath = $null; Changed = $true } }
   if($code -ne 0 -or -not (Test-Path -LiteralPath $OutPath -PathType Leaf)){
     return @{ Ok = $false; Token = "COVENANT_GATE_EVALUATOR_FAILED"; OutputPath = $null }
   }
@@ -135,7 +146,13 @@ function Invoke-CourierCovenantGate {
   } elseif(-not [string]::IsNullOrWhiteSpace($CovenantGateRoot)) {
     $result.Mode = "invoke"
     $inv = CCG-Invoke $RepoRoot $CovenantGateRoot $evalInputPath (Join-Path $WorkDir "covenantgate.eval_output.json")
-    if($inv.Ok){ $outputPath = $inv.OutputPath } else { $result.Outcome = $(if($inv.Token -eq "COVENANT_GATE_UNAVAILABLE"){ "unavailable" } else { "failed" }); $result.Token = $inv.Token }
+    if($inv.Ok){ $outputPath = $inv.OutputPath }
+    else {
+      # Unpinned root: not run, treated as unreachable. Pinned files changed: refused (tampering or an
+      # unreviewed update).
+      $result.Outcome = $(if($inv.Token -eq "COVENANT_GATE_UNAVAILABLE" -or $inv.ContainsKey("Unpinned")){ "unavailable" } elseif($inv.ContainsKey("Changed")){ "refused" } else { "failed" })
+      $result.Token = $inv.Token
+    }
   }
 
   if($null -ne $outputPath){

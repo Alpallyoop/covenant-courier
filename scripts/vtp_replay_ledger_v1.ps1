@@ -14,6 +14,7 @@ function Ensure-Dir($p){
 $LedgerRoot = Join-Path $RepoRoot "proofs\replay_ledger"
 Ensure-Dir $LedgerRoot
 
+if($SessionId -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\z' -or $SessionId.Contains("..")){ throw "VTP_REPLAY_LEDGER_FAIL:BAD_SESSION_ID" }
 $LedgerPath = Join-Path $LedgerRoot ($SessionId + ".ndjson")
 
 if(Test-Path $LedgerPath){

@@ -6,7 +6,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $PSExe = ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
-$Scripts = Join-Path $RepoRoot "scripts"
+$Scripts = $PSScriptRoot
 
 $CoreRunner     = Join-Path $Scripts "FULL_GREEN_RUNNER_COURIER_v1.ps1"
 $SigLane        = Join-Path $Scripts "_selftest_courier_signature_lane_v1.ps1"

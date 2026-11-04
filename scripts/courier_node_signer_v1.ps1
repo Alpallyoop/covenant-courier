@@ -95,6 +95,13 @@ if(-not (Test-Path -LiteralPath $privKey -PathType Leaf) -or -not (Test-Path -Li
 $core = KeyCore ([IO.File]::ReadAllText($pubKey))
 if($null -eq (ImportedLine $core)){ Fail "NOT_IMPORTED" }
 if(@($node.allowed_namespaces) -cnotcontains "courier/message"){ Fail "NODE_NAMESPACE_MISSING" }
+# One node, one principal: the principal names this node, and no other node already uses it.
+if(-not $Principal.EndsWith("/" + $NodeId,[StringComparison]::Ordinal)){ Fail "PRINCIPAL_NOT_FOR_THIS_NODE" }
+foreach($other in @(Get-ChildItem -LiteralPath (Split-Path -Parent $nodePath) -Filter "*.json" -File)){
+  if($other.FullName -eq $nodePath){ continue }
+  try { $o = CC-ReadJsonFile $other.FullName } catch { continue }
+  if((CC-HasProp $o "principal") -and [string]$o.principal -ceq $Principal){ Fail "PRINCIPAL_USED_BY_ANOTHER_NODE" }
+}
 $rec = [ordered]@{}
 foreach($p in $node.PSObject.Properties){ $rec[$p.Name] = $p.Value }
 $rec["principal"] = $Principal

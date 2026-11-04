@@ -21,6 +21,8 @@ foreach($line in @(Get-Content -LiteralPath $shaPath)){
   if([string]::IsNullOrWhiteSpace($line)){ continue }
   if($line -notmatch '^([0-9a-f]{64})\s{2}(.+)$'){ Fail ("VTP_INVITE_IMPORT_FAIL:BAD_SHA_LINE:" + $line) }
   $expected=$matches[1]; $rel=$matches[2]
+  # A listed file is a plain name inside the invite folder.
+  if($rel -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\z' -or $rel.Contains("..")){ Fail "VTP_INVITE_IMPORT_FAIL:BAD_FILE_NAME" }
   $path=Join-Path $InviteRoot $rel
   if(-not (Test-Path -LiteralPath $path -PathType Leaf)){ Fail ("VTP_INVITE_IMPORT_FAIL:MISSING_HASHED_FILE:" + $rel) }
   $actual=Get-Sha256Hex $path

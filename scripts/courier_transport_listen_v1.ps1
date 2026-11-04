@@ -81,12 +81,28 @@ Ensure-Dir $acceptedRoot
 Ensure-Dir $rejectedRoot
 
 $frames = @(Get-ChildItem -LiteralPath $dropRoot -Directory | Sort-Object Name)
+$seenPath = Join-Path $acceptedRoot ".accepted_payloads.txt"
+
+# Payload hashes this node has accepted. The frame header is not signed, so a frame id is not a replay
+# key; the hash of the signed message bytes is.
+function Test-PayloadSeen([string]$Hash){
+  if(-not (Test-Path -LiteralPath $seenPath -PathType Leaf)){ return $false }
+  foreach($l in [System.IO.File]::ReadAllLines($seenPath)){ if($l.Trim() -ceq $Hash){ return $true } }
+  return $false
+}
 
 foreach($frameDir in $frames){
   $frameJson = Join-Path $frameDir.FullName "frame.json"
 
   try {
-    if(-not (Test-Path -LiteralPath $frameJson)){ throw "COURIER_TRANSPORT_FAIL:MISSING_FRAME_JSON" }
+    # No links anywhere in a frame: a symlink or junction would point verification and later reads at a
+    # file outside the frame.
+    if(($frameDir.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){ throw "COURIER_TRANSPORT_FAIL:LINK_NOT_ALLOWED" }
+    foreach($it in @(Get-ChildItem -LiteralPath $frameDir.FullName -Recurse -Force -ErrorAction Stop)){
+      if(($it.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0){ throw "COURIER_TRANSPORT_FAIL:LINK_NOT_ALLOWED" }
+    }
+    if(-not (Test-Path -LiteralPath $frameJson -PathType Leaf)){ throw "COURIER_TRANSPORT_FAIL:MISSING_FRAME_JSON" }
+    if((Get-Item -LiteralPath $frameJson).Length -gt 65536){ throw "COURIER_TRANSPORT_FAIL:FRAME_TOO_LARGE" }
 
     $frame = Read-Json $frameJson
     $topProps = @($frame.PSObject.Properties.Name)
@@ -151,44 +167,37 @@ foreach($frameDir in $frames){
       throw "COURIER_TRANSPORT_FAIL:UNEXPECTED_SENDER_IDENTITY"
     }
 
-    $msgPath = Resolve-FrameChildPath $frameDir.FullName ([string]$frame.message_rel) "COURIER_TRANSPORT_FAIL:MESSAGE_PATH_ESCAPE"
+    # The message is one plain file under payload/ and its signature is exactly <message>.sig: nothing in
+    # these names can reach a command line or name another file.
+    $messageRel = [string]$frame.message_rel
+    if($messageRel -cnotmatch '^payload/[A-Za-z0-9][A-Za-z0-9._-]{0,127}\z' -or $messageRel.Contains("..")){ throw "COURIER_TRANSPORT_FAIL:BAD_MESSAGE_REL" }
+    if([string]$frame.signature_rel -cne ($messageRel + ".sig")){ throw "COURIER_TRANSPORT_FAIL:BAD_SIGNATURE_REL" }
+    $msgPath = Resolve-FrameChildPath $frameDir.FullName $messageRel "COURIER_TRANSPORT_FAIL:MESSAGE_PATH_ESCAPE"
     $sigPath = Resolve-FrameChildPath $frameDir.FullName ([string]$frame.signature_rel) "COURIER_TRANSPORT_FAIL:SIGNATURE_PATH_ESCAPE"
 
-    if(-not (Test-Path -LiteralPath $msgPath)){ throw "COURIER_TRANSPORT_FAIL:MISSING_MESSAGE_ARTIFACT" }
-    if(-not (Test-Path -LiteralPath $sigPath)){ throw "COURIER_TRANSPORT_FAIL:MISSING_SIGNATURE_ARTIFACT" }
+    if(-not (Test-Path -LiteralPath $msgPath -PathType Leaf)){ throw "COURIER_TRANSPORT_FAIL:MISSING_MESSAGE_ARTIFACT" }
+    if(-not (Test-Path -LiteralPath $sigPath -PathType Leaf)){ throw "COURIER_TRANSPORT_FAIL:MISSING_SIGNATURE_ARTIFACT" }
+    if((Get-Item -LiteralPath $msgPath).Length -gt 4MB){ throw "COURIER_TRANSPORT_FAIL:MESSAGE_TOO_LARGE" }
 
     $actualHash = (Get-FileHash -LiteralPath $msgPath -Algorithm SHA256).Hash.ToLowerInvariant()
     if($actualHash -ne [string]$frame.payload_sha256){
       throw "COURIER_TRANSPORT_FAIL:PAYLOAD_HASH_MISMATCH"
     }
+    if(Test-PayloadSeen $actualHash){ throw "COURIER_TRANSPORT_FAIL:REPLAY_DETECTED" }
 
-    # Scratch output stays inside the repository (Constellation agent policy: no system temp folder).
-    $verifyTmp = Join-Path $RepoRoot "runtime\tmp"
-    Ensure-Dir $verifyTmp
-    $verifyOut = Join-Path $verifyTmp ("courier_verify_out_" + $frameDir.Name + "_" + [guid]::NewGuid().ToString("N") + ".txt")
-    $verifyErr = Join-Path $verifyTmp ("courier_verify_err_" + $frameDir.Name + "_" + [guid]::NewGuid().ToString("N") + ".txt")
-    if(Test-Path -LiteralPath $verifyOut){ Remove-Item -LiteralPath $verifyOut -Force }
-    if(Test-Path -LiteralPath $verifyErr){ Remove-Item -LiteralPath $verifyErr -Force }
-
-    $p = Start-Process -FilePath $PSExe -ArgumentList @(
-      "-NoProfile","-NonInteractive","-ExecutionPolicy","Bypass",
-      "-File",$VerifySig,
-      "-RepoRoot",$RepoRoot,
-      "-MessagePath",$msgPath,
-      "-SignerIdentity",$expectedSender
-    ) -NoNewWindow -RedirectStandardOutput $verifyOut -RedirectStandardError $verifyErr -Wait -PassThru
-
-    if($p.ExitCode -ne 0){
-      $errText = ""
-      if(Test-Path -LiteralPath $verifyErr){
-        $errText = (Get-Content -LiteralPath $verifyErr -Raw)
-      }
-      if([string]::IsNullOrWhiteSpace($errText)){
-        throw "COURIER_TRANSPORT_FAIL:VERIFY_FAILED"
-      }
-      throw ("COURIER_TRANSPORT_FAIL:VERIFY_FAILED:" + $errText.Trim())
+    # Argument array through the call operator (no joined argument string); stderr kept as text.
+    $eapPrev = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+    try { $vOut = & $PSExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $VerifySig -RepoRoot $RepoRoot -MessagePath $msgPath -SignerIdentity $expectedSender 2>&1; $vCode = $LASTEXITCODE }
+    finally { $ErrorActionPreference = $eapPrev }
+    $vText = (@($vOut) | ForEach-Object { [string]$_ }) -join "`n"
+    if($vCode -ne 0){
+      $tok = ([regex]::Match($vText,'COURIER_VERIFY_FAIL:[A-Za-z0-9_:.@/+-]+')).Value
+      if([string]::IsNullOrWhiteSpace($tok)){ throw "COURIER_TRANSPORT_FAIL:VERIFY_FAILED" }
+      throw ("COURIER_TRANSPORT_FAIL:VERIFY_FAILED:" + $tok)
     }
-    foreach($t in @($verifyOut,$verifyErr)){ if(Test-Path -LiteralPath $t){ Remove-Item -LiteralPath $t -Force } }
+    # The verifier hashed the exact bytes it verified; they must be the bytes this frame names.
+    $vHash = ([regex]::Match($vText,'COURIER_SIGNATURE_VERIFIED_SHA256: ([0-9a-f]{64})')).Groups[1].Value
+    if($vHash -cne $actualHash){ throw "COURIER_TRANSPORT_FAIL:VERIFIED_BYTES_MISMATCH" }
 
     $dest = Join-Path $acceptedRoot $frameDir.Name
     # Accepted evidence is never overwritten: an existing destination is a replay.
@@ -204,6 +213,16 @@ foreach($frameDir in $frames){
       }
       throw
     }
+    # The frame is now in this node's own folder: the message there must still be the verified bytes (a
+    # writer of the drop folder could have swapped it between verification and the move).
+    $acceptedMsg = Join-Path $dest ($messageRel -replace '/',[string][System.IO.Path]::DirectorySeparatorChar)
+    if(-not (Test-Path -LiteralPath $acceptedMsg -PathType Leaf) -or (Get-FileHash -LiteralPath $acceptedMsg -Algorithm SHA256).Hash.ToLowerInvariant() -cne $actualHash){
+      $bad = Join-Path $rejectedRoot ($frameDir.Name + "-swapped-" + [guid]::NewGuid().ToString("N").Substring(0,8))
+      Move-Item -LiteralPath $dest -Destination $bad -ErrorAction Stop
+      $frameDir = Get-Item -LiteralPath $bad
+      throw "COURIER_TRANSPORT_FAIL:MESSAGE_CHANGED_AFTER_VERIFY"
+    }
+    [System.IO.File]::AppendAllText($seenPath,($actualHash + "`n"),(New-Object System.Text.UTF8Encoding($false)))
 
     $receiptPath = Append-CourierReceipt -RepoRoot $RepoRoot -Receipt ([ordered]@{
       schema = "courier.transport.receipt.v1"

@@ -7,7 +7,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = (Resolve-Path $RepoRoot).Path
-$Receive = Join-Path $RepoRoot "scripts\courier_receive_message_v1.ps1"
+$Receive = Join-Path $PSScriptRoot "courier_receive_message_v1.ps1"
 $RunRoot = Join-Path $RepoRoot ("proofs\product_receive_negative\" + (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssfffZ"))
 $TempReceipt = Join-Path $RunRoot "covenant_courier_product.no_unaccepted_sent.ndjson"
 
@@ -53,6 +53,11 @@ $lines = @(
 [IO.File]::WriteAllText($TempReceipt, (($lines -join [string][char]10) + [string][char]10), [Text.UTF8Encoding]::new($false))
 
 $ps = ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
+# Receive verifies the log's chain before using it: chain the test log first.
+$eapPrev = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+$chainOut = & $ps -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "courier_receipt_chain_v1.ps1") -RepoRoot $RepoRoot -ReceiptPath $TempReceipt -ChainPath ($TempReceipt + ".chain.ndjson") 2>&1
+$ErrorActionPreference = $eapPrev
+if($LASTEXITCODE -ne 0){ Write-Host ($chainOut | Out-String); throw "COVENANT_COURIER_RECEIVE_NEGATIVE_FAIL:CHAIN_TEST_LOG" }
 
 $stdoutPath = Join-Path $RunRoot "receive-negative.stdout.txt"
 $stderrPath = Join-Path $RunRoot "receive-negative.stderr.txt"

@@ -16,7 +16,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = (Resolve-Path $RepoRoot).Path
-$Scripts = Join-Path $RepoRoot "scripts"
+$Scripts = $PSScriptRoot
 $PSExe = ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
 
 function Run-Child([string]$Script,[string[]]$ChildArgs,[int[]]$OkCodes = @(0)){

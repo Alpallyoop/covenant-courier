@@ -9,7 +9,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = (Resolve-Path $RepoRoot).Path
-$Scripts = Join-Path $RepoRoot "scripts"
+$Scripts = Join-Path $PSScriptRoot "scripts"
 
 function Run-PS([string]$Script,[string[]]$ArgsList){
   & ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Script @ArgsList
@@ -45,7 +45,7 @@ if($Command -eq "smoke"){
     "scripts\_RUN_vtp_dev_fast_v1.ps1",
     "scripts\_RUN_vtp_conformance_v1.ps1"
   )){
-    if(-not (Test-Path -LiteralPath (Join-Path $RepoRoot $rel) -PathType Leaf)){
+    if(-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot $rel) -PathType Leaf)){
       throw "VTP_SMOKE_FAIL:MISSING:$rel"
     }
   }
@@ -139,27 +139,23 @@ if($Command -eq "node-loop"){
 }
 
 if($Command -eq "send"){
-  $messagePath = Join-Path $RepoRoot "test_vectors\courier_v1\transport_hardening\prep\message.tokenized.json"
-
-  if(-not (Test-Path -LiteralPath $messagePath -PathType Leaf)){
-    $prepDir = Split-Path -Parent $messagePath
-    [void][IO.Directory]::CreateDirectory($prepDir)
-
-    $prepared = [ordered]@{
-      schema = "courier.message.tokenized.v1"
-      message_id = "vtp-demo-" + (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssfffZ")
-      created_utc = (Get-Date).ToUniversalTime().ToString("o")
-      sender_identity = "courier-local@covenant"
-      recipient_identity = "courier-local@covenant"
-      payload_text = "covenant courier local preview message"
-      preview = "Covenant Courier local preview"
-    }
-
-    $json = $prepared | ConvertTo-Json -Depth 20 -Compress
-    [IO.File]::WriteAllText($messagePath, ($json + [string][char]10), [Text.UTF8Encoding]::new($false))
-
-    Write-Host ("VTP_SEND_PREPARED_MESSAGE_BOOTSTRAP_OK: " + $messagePath)
+  # A fresh demo message every time (its own id and time): the receiver refuses a signed payload it has
+  # already accepted, so re-sending identical bytes is a replay, not a new message.
+  $stamp = (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssfffZ")
+  $messagePath = Join-Path $RepoRoot ("runtime\vtp_demo\" + $stamp + "-" + [guid]::NewGuid().ToString("N").Substring(0,8) + "\message.tokenized.json")
+  [void][IO.Directory]::CreateDirectory((Split-Path -Parent $messagePath))
+  $prepared = [ordered]@{
+    schema = "courier.message.tokenized.v1"
+    message_id = "vtp-demo-" + $stamp
+    created_utc = (Get-Date).ToUniversalTime().ToString("o")
+    sender_identity = "courier-local@covenant"
+    recipient_identity = "courier-local@covenant"
+    payload_text = "covenant courier local preview message"
+    preview = "Covenant Courier local preview"
   }
+  $json = $prepared | ConvertTo-Json -Depth 20 -Compress
+  [IO.File]::WriteAllText($messagePath, ($json + [string][char]10), [Text.UTF8Encoding]::new($false))
+  Write-Host ("VTP_SEND_PREPARED_MESSAGE_BOOTSTRAP_OK: " + $messagePath)
 
   $nodeRoot = Join-Path $RepoRoot "registry\nodes"
   $netRoot = Join-Path $RepoRoot "registry\networks"
@@ -228,6 +224,10 @@ if($Command -eq "send"){
     "-NetworkId","courier-internal-net-v1",
     "-SessionRole","message-delivery"
   )
+
+  # Sign the fresh demo message with the local signer (bootstrapped when missing).
+  Run-PS (Join-Path $Scripts "courier_bootstrap_local_trust_v1.ps1") @("-RepoRoot",$RepoRoot) | Out-Null
+  Run-PS (Join-Path $Scripts "courier_sign_message_v1.ps1") @("-RepoRoot",$RepoRoot,"-MessagePath",$messagePath,"-SignerIdentity","courier-local@covenant","-Namespace","courier/message") | Out-Null
 
   Run-PS (Join-Path $Scripts "courier_transport_send_v1.ps1") @(
     "-RepoRoot",$RepoRoot,

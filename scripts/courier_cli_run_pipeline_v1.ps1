@@ -8,7 +8,7 @@ $ErrorActionPreference = "Stop"
 
 $PSExe = ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
 
-$Run = Join-Path $RepoRoot "scripts\courier_run_message_pipeline_v1.ps1"
+$Run = Join-Path $PSScriptRoot "courier_run_message_pipeline_v1.ps1"
 
 if(-not (Test-Path $Run)){
   throw "COURIER_PIPELINE_MISSING_CORE"

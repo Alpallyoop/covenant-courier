@@ -1,6 +1,6 @@
 # Current state - Covenant Courier
 
-Recorded 2026-10-15, updated 2026-11-01. Describes what the implementation does today, not the target. Identity, ownership
+Recorded 2026-10-15, updated 2026-11-04. Describes what the implementation does today, not the target. Identity, ownership
 and integrations proposed for the registry: `docs/proposals/0001-covenant-courier-ownership-and-integrations.md`.
 
 ## What runs
@@ -8,10 +8,10 @@ and integrations proposed for the registry: `docs/proposals/0001-covenant-courie
 | Area | State | Proof |
 |---|---|---|
 | Governed delivery (`courier.ps1 deliver` / `send`) | Working. Message validation, delivery policy (`policy/courier_product_policy_v1.json`), policy decision + notification documents, signed `covenant_courier.delivery.v1` envelope sent as a VTP frame, product receipt for every outcome. | `scripts/_selftest_covenant_courier_deliver_v1.ps1` |
-| Receive (`courier.ps1 receive`) | Working. Node policy loop, listener signature + hash check, envelope binding check against the sender's receipt, inbox release, accepted or rejected receipt. | same, plus `courier.ps1 verify` |
+| Receive (`courier.ps1 receive`) | Working. Node policy loop, listener signature + hash check (verified bytes, per-node payload replay index), envelope binding check against the sender's receipt, the receiver's own policy re-run on the received bytes (notification built from the receiver's profile), inbox release once, accepted or rejected receipt. | same, plus `scripts/_selftest_courier_receive_policy_v1.ps1` |
 | Product receipt chain | Append-only and tamper-evident (re-verifies every existing entry before appending). | same |
 | Constellation integration receipts | Emitted by Courier for `covenant-courier > covenant-gate` and `covenant-courier > neverlost`, byte-exact to `constellation.integration.receipt.v1`. | `scripts/_selftest_constellation_integration_receipts_v1.ps1` |
-| Covenant Gate adapter | Invoke mode (Covenant Gate's sealed evaluator, out of process) and signed-document mode. Off by default. | deliver selftest (+ real Covenant Gate when `COVENANT_GATE_ROOT` is set) |
+| Covenant Gate adapter | Invoke mode (Covenant Gate's sealed evaluator, out of process, only from a checkout pinned with `courier.ps1 cg-pin`) and signed-document mode (signer must not be a node principal). Off by default. | deliver selftest (+ real Covenant Gate when `COVENANT_GATE_ROOT` is set) |
 | NeverLost trust import | Pinned import of a principals trust bundle into a third trust root. | `scripts/_selftest_courier_trust_import_v1.ps1` |
 | NeverLost-issued node signers | `courier.ps1 node-signer` creates a node key for `single-tenant/device_agent/courier/<node-id>` and switches the node's registry principal only after a trust import carries that exact key. | `scripts/_selftest_courier_node_signer_v1.ps1` |
 | VTP v1 transport | Frames, listener, node loop, outbox, replay guard, UDP wire adapter (bindings from the session registry). | `vtp.ps1 verify`, `_RUN_*` suites |
@@ -20,6 +20,13 @@ and integrations proposed for the registry: `docs/proposals/0001-covenant-courie
 | Message origin | Optional `origin` (`human`/`ai`/`service`) carried to Covenant Gate as `action.origin` (`unspecified` when absent). | deliver selftest |
 
 ## Known limits (true today)
+
+- Audit 2026-11-04 (`SECURITY.md`): until then the receiver released whatever `policy_decision` the sender
+  signed, which conflicted with the canonical role ("no delivery without policy"). The receiver now re-runs
+  local policy; it still does not check Covenant Gate's decision, so for gate-required profiles a holder of the
+  sender node key can deliver what passes local policy without a gate allow. Closing that needs a Covenant
+  Gate-signed decision carried in the envelope (Covenant Gate PR #7 adds the signer). The product receipt chain
+  is unkeyed (tamper-evident against partial edits only).
 
 - Developer preview. Not a production E2E messenger; see `SECURITY.md` and
   `docs/SECURITY_HARDENING_PLAN.md`. Product delivery frames are signed and hash-bound but not

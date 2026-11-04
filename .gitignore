@@ -18,3 +18,6 @@ src/Vtp2/obj/
 *.p12
 *_ed25519
 *.state
+
+# Self-test policy files (written to policy/ for one case and removed)
+policy/_selftest_*.json

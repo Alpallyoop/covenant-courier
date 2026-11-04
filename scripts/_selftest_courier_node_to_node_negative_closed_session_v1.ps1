@@ -39,6 +39,13 @@ $enc = New-Object System.Text.UTF8Encoding($false)
 & $PSExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $RegSelf -RepoRoot $RepoRoot
 if($LASTEXITCODE -ne 0){ throw ("COURIER_NODE2NODE_NEG_FAIL:REGISTRY_SELFTEST_EXIT_" + $LASTEXITCODE) }
 
+# A session of its own, opened and closed here (sessions are never reopened, so the demo session is not used).
+$ClosedSession = "session-n2n-closed-" + (Get-Date).ToUniversalTime().ToString("yyyyMMddTHHmmssfffZ")
+& $PSExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "courier_open_session_v1.ps1") -RepoRoot $RepoRoot -SessionId $ClosedSession -SenderNodeId "node-alpha" -RecipientNodeId "node-beta" -NetworkId "courier-internal-net-v1" -SessionRole "message-delivery"
+if($LASTEXITCODE -ne 0){ throw "COURIER_NODE2NODE_NEG_FAIL:OPEN_SESSION" }
+& $PSExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "courier_close_session_v1.ps1") -RepoRoot $RepoRoot -SessionId $ClosedSession
+if($LASTEXITCODE -ne 0){ throw "COURIER_NODE2NODE_NEG_FAIL:CLOSE_SESSION" }
+
 & $PSExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Bootstrap -RepoRoot $RepoRoot
 if($LASTEXITCODE -ne 0){ throw ("COURIER_NODE2NODE_NEG_FAIL:BOOTSTRAP_EXIT_" + $LASTEXITCODE) }
 
@@ -56,7 +63,7 @@ $MessagePath = Join-Path $RepoRoot "test_vectors\courier_v1\transport_hardening\
   -SenderNodeId "node-alpha" `
   -RecipientNodeId "node-beta" `
   -NetworkId "courier-internal-net-v1" `
-  -SessionId "session-alpha-beta-001" `
+  -SessionId $ClosedSession `
   -SenderRole "message-delivery" `
   -DropRoot $Drop
 if($LASTEXITCODE -ne 0){ throw ("COURIER_NODE2NODE_NEG_FAIL:SEND_EXIT_" + $LASTEXITCODE) }
@@ -68,5 +75,8 @@ if($LASTEXITCODE -ne 0){ throw ("COURIER_NODE2NODE_NEG_FAIL:LISTEN_EXIT_" + $LAS
 
 $rejected = @(Get-ChildItem -LiteralPath $Rejected -Directory -ErrorAction SilentlyContinue)
 if($rejected.Count -lt 1){ throw "COURIER_NODE2NODE_NEG_FAIL:NO_REJECTED_FRAME" }
+$why = [IO.File]::ReadAllText((Join-Path $rejected[0].FullName "reject_reason.txt"))
+if($why -notmatch "SESSION_NOT_OPEN"){ throw ("COURIER_NODE2NODE_NEG_FAIL:WRONG_REJECT_REASON:" + $why.Trim()) }
+Remove-Item -LiteralPath (Join-Path $RepoRoot ("registry\sessions\" + $ClosedSession + ".json")) -Force
 
 Write-Host "COURIER_NODE_TO_NODE_NEGATIVE_CLOSED_SESSION_OK"
