@@ -1,6 +1,6 @@
 param(
   [string]$RepoRoot = ".",
-  # -Full adds the governed-delivery, integration-receipt, trust-import and VTP v2 proofs.
+  # -Full adds the governed-delivery, integration-receipt, trust-import, node-signer and VTP v2 proofs.
   [switch]$Full
 )
 
@@ -8,8 +8,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = (Resolve-Path $RepoRoot).Path
-$Courier = Join-Path $RepoRoot "courier.ps1"
-$Vtp = Join-Path $RepoRoot "vtp.ps1"
+$Courier = Join-Path (Split-Path -Parent $PSScriptRoot) "courier.ps1"
+$Vtp = Join-Path (Split-Path -Parent $PSScriptRoot) "vtp.ps1"
 
 if(-not (Test-Path -LiteralPath $Courier -PathType Leaf)){
   throw "COVENANT_COURIER_VERIFY_FAIL:MISSING_COURIER_CLI"
@@ -30,7 +30,7 @@ function Run-Step {
   Write-Host ("COVENANT_COURIER_VERIFY_STEP_START: " + $Name)
 
   $ps = ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
-  $out = & $ps -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Script @ChildArgs 2>&1
+  $eapPrev = $ErrorActionPreference; $ErrorActionPreference = "Continue"; $out = & $ps -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Script @ChildArgs 2>&1; $ErrorActionPreference = $eapPrev
   $code = $LASTEXITCODE
   $text = ($out | Out-String)
 
@@ -57,10 +57,13 @@ Run-Step -Name "receipt-chain" -Script $Courier -ChildArgs @("receipt-chain","-R
 Run-Step -Name "vtp-verify" -Script $Vtp -ChildArgs @("verify","-RepoRoot",$RepoRoot) -ExpectedToken "VTP_VERIFY_ALL_OK"
 
 if($Full){
-  Run-Step -Name "deliver-selftest" -Script (Join-Path $RepoRoot "scripts\_selftest_covenant_courier_deliver_v1.ps1") -ChildArgs @("-RepoRoot",$RepoRoot) -ExpectedToken "COVENANT_COURIER_DELIVER_SELFTEST_OK"
-  Run-Step -Name "integration-receipts-selftest" -Script (Join-Path $RepoRoot "scripts\_selftest_constellation_integration_receipts_v1.ps1") -ChildArgs @("-RepoRoot",$RepoRoot) -ExpectedToken "CONSTELLATION_INTEGRATION_RECEIPTS_SELFTEST_OK"
-  Run-Step -Name "trust-import-selftest" -Script (Join-Path $RepoRoot "scripts\_selftest_courier_trust_import_v1.ps1") -ChildArgs @("-RepoRoot",$RepoRoot) -ExpectedToken "COURIER_TRUST_IMPORT_SELFTEST_OK"
-  Run-Step -Name "integration-receipts-verify" -Script (Join-Path $RepoRoot "scripts\courier_integration_receipts_v1.ps1") -ChildArgs @("-RepoRoot",$RepoRoot,"verify") -ExpectedToken "COURIER_INTEGRATION_RECEIPTS_VERIFY_OK"
+  Run-Step -Name "deliver-selftest" -Script (Join-Path $PSScriptRoot "_selftest_covenant_courier_deliver_v1.ps1") -ChildArgs @("-RepoRoot",$RepoRoot) -ExpectedToken "COVENANT_COURIER_DELIVER_SELFTEST_OK"
+  Run-Step -Name "integration-receipts-selftest" -Script (Join-Path $PSScriptRoot "_selftest_constellation_integration_receipts_v1.ps1") -ChildArgs @("-RepoRoot",$RepoRoot) -ExpectedToken "CONSTELLATION_INTEGRATION_RECEIPTS_SELFTEST_OK"
+  Run-Step -Name "trust-import-selftest" -Script (Join-Path $PSScriptRoot "_selftest_courier_trust_import_v1.ps1") -ChildArgs @("-RepoRoot",$RepoRoot) -ExpectedToken "COURIER_TRUST_IMPORT_SELFTEST_OK"
+  Run-Step -Name "receive-policy-selftest" -Script (Join-Path $PSScriptRoot "_selftest_courier_receive_policy_v1.ps1") -ChildArgs @("-RepoRoot",$RepoRoot) -ExpectedToken "COURIER_RECEIVE_POLICY_SELFTEST_OK"
+  Run-Step -Name "vtp-trust-pin-selftest" -Script (Join-Path $PSScriptRoot "_selftest_vtp_trust_bootstrap_v1.ps1") -ChildArgs @("-RepoRoot",$RepoRoot) -ExpectedToken "VTP_TRUST_BOOTSTRAP_SELFTEST_OK"
+  Run-Step -Name "node-signer-selftest" -Script (Join-Path $PSScriptRoot "_selftest_courier_node_signer_v1.ps1") -ChildArgs @("-RepoRoot",$RepoRoot) -ExpectedToken "COURIER_NODE_SIGNER_SELFTEST_OK"
+  Run-Step -Name "integration-receipts-verify" -Script (Join-Path $PSScriptRoot "courier_integration_receipts_v1.ps1") -ChildArgs @("-RepoRoot",$RepoRoot,"verify") -ExpectedToken "COURIER_INTEGRATION_RECEIPTS_VERIFY_OK"
   Run-Step -Name "vtp2-verify" -Script (Join-Path $RepoRoot "vtp2.ps1") -ChildArgs @("verify") -ExpectedToken "VTP2_SELFTEST_OK"
   Write-Host "COVENANT_COURIER_VERIFY_ALL_OK"
 }

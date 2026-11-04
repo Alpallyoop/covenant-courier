@@ -7,7 +7,8 @@ param(
   [string]$SessionId = "session-alpha-beta-001",
   [string]$PolicyProfile = "default",
   [string]$Preview = "Covenant Courier prepared message",
-  [string]$PayloadText = "hello from covenant courier"
+  [string]$PayloadText = "hello from covenant courier",
+  [ValidateSet("","human","ai","service")][string]$Origin = ""
 )
 
 Set-StrictMode -Version Latest
@@ -46,6 +47,8 @@ $msg = [ordered]@{
   payload_sha256 = $payloadSha
   created_utc = (Get-Date).ToUniversalTime().ToString("o")
 }
+
+if(-not [string]::IsNullOrWhiteSpace($Origin)){ $msg["origin"] = $Origin }
 
 $msgDir = Join-Path $OutRoot $messageId
 [void][IO.Directory]::CreateDirectory($msgDir)

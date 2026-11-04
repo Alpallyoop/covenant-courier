@@ -2,7 +2,10 @@ param(
   [Parameter(Mandatory=$true)][string]$RepoRoot,
   [string]$NodeId = "node-beta",
   [string]$ConfigPath = "",
-  [switch]$Once
+  [switch]$Once,
+  # Listen on the node's approved folder (frames the policy loop allowed) instead of its open drop
+  # folder, so nothing written to the drop folder after the policy decision reaches the listener.
+  [switch]$Approved
 )
 
 Set-StrictMode -Version Latest
@@ -42,10 +45,10 @@ function Append-Receipt([string]$RepoRoot,[hashtable]$Details){
 
 if([string]::IsNullOrWhiteSpace($ConfigPath)){
   $runtimeRoot = Join-Path $RepoRoot ("runtime\nodes\" + $NodeId)
-  $drop = Join-Path $runtimeRoot "inbox\drop"
+  $drop = $(if($Approved){ Join-Path $runtimeRoot "approved" } else { Join-Path $runtimeRoot "inbox\drop" })
   $accepted = Join-Path $runtimeRoot "accepted"
   $rejected = Join-Path $runtimeRoot "rejected"
-  $ConfigPath = Join-Path $runtimeRoot "listener.config.json"
+  $ConfigPath = Join-Path $runtimeRoot $(if($Approved){ "listener.approved.config.json" } else { "listener.config.json" })
 
   Ensure-Dir $drop
   Ensure-Dir $accepted

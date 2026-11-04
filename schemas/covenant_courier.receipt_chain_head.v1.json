@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "covenant_courier.receipt_chain_head.v1",
+  "title": "Covenant Courier signed receipt chain head v1",
+  "description": "<chain>.head.json, canonical JSON, with a detached ssh-keygen -Y sign signature in <chain>.head.json.sig (principal courier-receipts@local, namespace courier/receipt-chain). Written after every append; every chain run checks the signature and that chain entry entries-1 still has chain_hash.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "chain", "entries", "chain_hash", "signed_utc", "signer"],
+  "properties": {
+    "schema": { "const": "covenant_courier.receipt_chain_head.v1" },
+    "chain": { "type": "string", "description": "File name of the chain this head signs." },
+    "entries": { "type": "integer", "minimum": 0 },
+    "chain_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "signed_utc": { "type": "string" },
+    "signer": { "type": "string" }
+  }
+}

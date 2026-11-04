@@ -7,9 +7,9 @@ $ErrorActionPreference = "Stop"
 
 $RepoRoot = (Resolve-Path $RepoRoot).Path
 $PSExe = ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
-$Courier = Join-Path $RepoRoot "courier.ps1"
-$Vtp = Join-Path $RepoRoot "vtp.ps1"
-$VtpVerify = Join-Path $RepoRoot "vtp_verify_all.ps1"
+$Courier = Join-Path (Split-Path -Parent $PSScriptRoot) "courier.ps1"
+$Vtp = Join-Path (Split-Path -Parent $PSScriptRoot) "vtp.ps1"
+$VtpVerify = Join-Path (Split-Path -Parent $PSScriptRoot) "vtp_verify_all.ps1"
 
 function Fail([string]$Code){
   throw $Code
@@ -51,7 +51,7 @@ function Run-Courier([string]$Command){
 
   Push-Location $RepoRoot
   try {
-    $out = & $PSExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Courier $Command 2>&1
+    $eapPrev = $ErrorActionPreference; $ErrorActionPreference = "Continue"; $out = & $PSExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Courier $Command 2>&1; $ErrorActionPreference = $eapPrev
     $exitCode = $LASTEXITCODE
   } finally {
     Pop-Location

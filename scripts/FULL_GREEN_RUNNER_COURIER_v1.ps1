@@ -6,8 +6,8 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $PSExe = ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
-$Self  = Join-Path $RepoRoot "scripts\_selftest_courier_v1.ps1"
-$Lib   = Join-Path $RepoRoot "scripts\_lib_courier_v1.ps1"
+$Self  = Join-Path $PSScriptRoot "_selftest_courier_v1.ps1"
+$Lib   = Join-Path $PSScriptRoot "_lib_courier_v1.ps1"
 
 . $Lib
 

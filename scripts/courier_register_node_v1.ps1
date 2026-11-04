@@ -25,6 +25,10 @@ if([string]::IsNullOrWhiteSpace($NodeName)){ throw "COURIER_NODE_FAIL:MISSING_NO
 if([string]::IsNullOrWhiteSpace($NodeRole)){ throw "COURIER_NODE_FAIL:MISSING_NODE_ROLE" }
 if([string]::IsNullOrWhiteSpace($Principal)){ throw "COURIER_NODE_FAIL:MISSING_PRINCIPAL" }
 
+# The node id is a file name and the principal reaches ssh-keygen and allowed_signers: both strict.
+if($NodeId -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,126}[A-Za-z0-9_-]\z|^[A-Za-z0-9]\z' -or $NodeId.Contains("..")){ throw "COURIER_NODE_FAIL:BAD_NODE_ID" }
+if($Principal -cnotmatch '^[A-Za-z0-9][A-Za-z0-9@._/+-]{0,199}\z'){ throw "COURIER_NODE_FAIL:BAD_PRINCIPAL" }
+foreach($ns in @($AllowedNamespaces)){ if([string]$ns -cnotmatch '^[A-Za-z0-9._/-]{1,100}\z'){ throw "COURIER_NODE_FAIL:BAD_NAMESPACE" } }
 $Path = Join-Path $RegRoot ($NodeId + ".json")
 
 $obj = [ordered]@{

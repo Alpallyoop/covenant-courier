@@ -41,6 +41,14 @@
                                                  "type":  "string",
                                                  "minLength":  1
                                              },
+                       "origin":  {
+                                      "description":  "Optional. Who originated the message: human, ai or service. Sent to Covenant Gate as action.origin; absent is sent as unspecified (default-deny under Covenant Gate rules).",
+                                      "enum":  [
+                                                   "human",
+                                                   "ai",
+                                                   "service"
+                                               ]
+                                  },
                        "organization_id":  {
                                                "type":  [
                                                             "string",

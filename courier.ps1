@@ -7,25 +7,42 @@ param(
   [string]$RecipientNodeId = "node-beta",
   [string]$PayloadText = "hello from covenant courier",
   [string]$PolicyProfile = "default",
+  [ValidateSet("","human","ai","service")][string]$Origin = "",
   # deliver
   [string]$MessagePath,
   [string]$PayloadPath,
   [string]$OutDir,
   [string]$CovenantGateRoot,
   [string]$CovenantGateDecisionPath,
+  # cg-pin
+  [string]$PolicyHash,
   # trust-import
   [string]$TrustBundlePath,
   [string]$ExpectedSha256,
   [string]$NeverLostRoot,
+  # secure-session (bind a Courier session to a VTP v2 session)
+  [string]$SessionId,
+  [switch]$LocalPair,
+  [string]$Vtp2SessionId,
+  [string]$SenderFingerprint,
+  [string]$RecipientFingerprint,
+  # receipt-chain: re-verify without appending
+  [switch]$VerifyOnly,
+  # node-signer (NeverLost-issued node signing keys)
+  [string]$NodeId,
+  [string]$Principal,
   # integration-receipts
-  [ValidateSet("verify","list","nfl-inboxes")][string]$Action = "verify"
+  # integration-receipts: verify|list|nfl-inboxes; node-signer: keygen|adopt|status
+  [ValidateSet("verify","list","nfl-inboxes","keygen","adopt","status")][string]$Action = "verify"
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = (Resolve-Path $RepoRoot).Path
-$Scripts = Join-Path $RepoRoot "scripts"
+# Windows PowerShell 5.1 drops empty string arguments to child processes: pass -Origin only when set.
+$OriginArgs = @(); if(-not [string]::IsNullOrWhiteSpace($Origin)){ $OriginArgs = @("-Origin",$Origin) }
+$Scripts = Join-Path $PSScriptRoot "scripts"
 
 function Run-PS {
   param(
@@ -52,16 +69,22 @@ if($Command -eq "help"){
   Write-Host "Commands:"
   Write-Host "  .\courier.ps1 help"
   Write-Host "  .\courier.ps1 schema-test"
-  Write-Host "  .\courier.ps1 prepare [-PayloadText ..] [-PolicyProfile default|public|confidential]"
+  Write-Host "  .\courier.ps1 prepare [-PayloadText ..] [-PolicyProfile default|public|confidential] [-Origin human|ai|service]"
   Write-Host "  .\courier.ps1 send [-PayloadText ..] [-PolicyProfile ..]"
   Write-Host "  .\courier.ps1 deliver -MessagePath <message.json> -PayloadPath <payload> [-OutDir ..]"
   Write-Host "                        [-CovenantGateRoot <dir> | -CovenantGateDecisionPath <doc>]"
+  Write-Host "  .\courier.ps1 cg-pin (-CovenantGateRoot <dir> | -PolicyHash <hex>)"
+  Write-Host "                        pin the Covenant Gate checkout invoke mode may run and the policy its decisions must carry"
+  Write-Host "  .\courier.ps1 secure-session -SessionId <id> (-LocalPair | -Vtp2SessionId <hex> -SenderFingerprint <hex> -RecipientFingerprint <hex>)"
+  Write-Host "                        bind a Courier session to a VTP v2 session (payload_encryption vtp2)"
   Write-Host "  .\courier.ps1 receive"
   Write-Host "  .\courier.ps1 receive-negative"
   Write-Host "  .\courier.ps1 receipts"
-  Write-Host "  .\courier.ps1 receipt-chain"
+  Write-Host "  .\courier.ps1 receipt-chain [-VerifyOnly]"
   Write-Host "  .\courier.ps1 trust-import -TrustBundlePath <neverlost trust_bundle.json> -ExpectedSha256 <sha> [-NeverLostRoot <dir>]"
   Write-Host "  .\courier.ps1 integration-receipts [-Action verify|list|nfl-inboxes]"
+  Write-Host "  .\courier.ps1 node-signer -Action keygen|adopt|status -NodeId <node> [-Principal single-tenant/device_agent/...]"
+  Write-Host "                        NeverLost-issued node signing key (keygen -> issue in NeverLost -> trust-import -> adopt)"
   Write-Host "  .\courier.ps1 verify          product + VTP substrate proof"
   Write-Host "  .\courier.ps1 verify-all      verify + delivery, integration, trust-import and VTP v2 proofs"
   Write-Host ""
@@ -77,12 +100,12 @@ if($Command -eq "schema-test"){
 }
 
 if($Command -eq "prepare"){
-  Run-PS (Join-Path $Scripts "courier_prepare_message_v1.ps1") @("-RepoRoot",$RepoRoot,"-From",$From,"-To",$RecipientIdentity,"-RecipientNodeId",$RecipientNodeId,"-PolicyProfile",$PolicyProfile,"-PayloadText",$PayloadText)
+  Run-PS (Join-Path $Scripts "courier_prepare_message_v1.ps1") (@("-RepoRoot",$RepoRoot,"-From",$From,"-To",$RecipientIdentity,"-RecipientNodeId",$RecipientNodeId,"-PolicyProfile",$PolicyProfile,"-PayloadText",$PayloadText) + $OriginArgs)
   exit 0
 }
 
 if($Command -eq "send"){
-  Run-PS (Join-Path $Scripts "courier_send_message_v1.ps1") @("-RepoRoot",$RepoRoot,"-From",$From,"-RecipientIdentity",$RecipientIdentity,"-RecipientNodeId",$RecipientNodeId,"-PolicyProfile",$PolicyProfile,"-PayloadText",$PayloadText)
+  Run-PS (Join-Path $Scripts "courier_send_message_v1.ps1") (@("-RepoRoot",$RepoRoot,"-From",$From,"-RecipientIdentity",$RecipientIdentity,"-RecipientNodeId",$RecipientNodeId,"-PolicyProfile",$PolicyProfile,"-PayloadText",$PayloadText) + $OriginArgs)
   exit 0
 }
 
@@ -97,8 +120,36 @@ if($Command -eq "deliver"){
   exit 0
 }
 
+if($Command -eq "node-signer"){
+  if([string]::IsNullOrWhiteSpace($NodeId) -or @("keygen","adopt","status") -notcontains $Action){ throw "COURIER_NODE_SIGNER_USAGE:-Action_keygen|adopt|status_and_-NodeId_required" }
+  $a = @("-RepoRoot",$RepoRoot,"-Action",$Action,"-NodeId",$NodeId)
+  if(-not [string]::IsNullOrWhiteSpace($Principal)){ $a += @("-Principal",$Principal) }
+  Run-PS (Join-Path $Scripts "courier_node_signer_v1.ps1") $a
+  exit 0
+}
+
+if($Command -eq "secure-session"){
+  if([string]::IsNullOrWhiteSpace($SessionId)){ throw "COURIER_SECURE_SESSION_USAGE:SessionId_required" }
+  $a = @("-RepoRoot",$RepoRoot,"-SessionId",$SessionId)
+  if($LocalPair){ $a += @("-LocalPair") }
+  if(-not [string]::IsNullOrWhiteSpace($Vtp2SessionId)){ $a += @("-Vtp2SessionId",$Vtp2SessionId) }
+  if(-not [string]::IsNullOrWhiteSpace($SenderFingerprint)){ $a += @("-SenderFingerprint",$SenderFingerprint) }
+  if(-not [string]::IsNullOrWhiteSpace($RecipientFingerprint)){ $a += @("-RecipientFingerprint",$RecipientFingerprint) }
+  Run-PS (Join-Path $Scripts "courier_secure_session_v1.ps1") $a
+  exit 0
+}
+
 if($Command -eq "receipts"){
   Run-PS (Join-Path $Scripts "courier_receipts_latest_v1.ps1") @("-RepoRoot",$RepoRoot)
+  exit 0
+}
+
+if($Command -eq "cg-pin"){
+  if([string]::IsNullOrWhiteSpace($CovenantGateRoot) -and [string]::IsNullOrWhiteSpace($PolicyHash)){ throw "COURIER_CG_PIN_USAGE:CovenantGateRoot_or_PolicyHash_required" }
+  $a = @("-RepoRoot",$RepoRoot)
+  if(-not [string]::IsNullOrWhiteSpace($CovenantGateRoot)){ $a += @("-CovenantGateRoot",$CovenantGateRoot) }
+  if(-not [string]::IsNullOrWhiteSpace($PolicyHash)){ $a += @("-PolicyHash",$PolicyHash) }
+  Run-PS (Join-Path $Scripts "courier_covenant_gate_pin_v1.ps1") $a
   exit 0
 }
 
@@ -111,6 +162,7 @@ if($Command -eq "trust-import"){
 }
 
 if($Command -eq "integration-receipts"){
+  if(@("verify","list","nfl-inboxes") -notcontains $Action){ throw "COURIER_INTEGRATION_RECEIPTS_USAGE:-Action_verify|list|nfl-inboxes" }
   Run-PS (Join-Path $Scripts "courier_integration_receipts_v1.ps1") @("-RepoRoot",$RepoRoot,$Action)
   exit 0
 }
@@ -136,7 +188,8 @@ if($Command -eq "receive-negative"){
 }
 
 if($Command -eq "receipt-chain"){
-  Run-PS (Join-Path $Scripts "courier_receipt_chain_v1.ps1") @("-RepoRoot",$RepoRoot)
+  $a = @("-RepoRoot",$RepoRoot); if($VerifyOnly){ $a += @("-VerifyOnly") }
+  Run-PS (Join-Path $Scripts "courier_receipt_chain_v1.ps1") $a
   exit 0
 }
 throw ("UNKNOWN_COURIER_COMMAND:" + $Command)

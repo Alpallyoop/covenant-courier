@@ -8,7 +8,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = (Resolve-Path $RepoRoot).Path
-$LoopPath = Join-Path $RepoRoot "scripts\vtp_node_loop_forever_v1.ps1"
+$LoopPath = Join-Path $PSScriptRoot "vtp_node_loop_forever_v1.ps1"
 if(-not (Test-Path -LiteralPath $LoopPath -PathType Leaf)){
   throw "VTP_INSTALL_TASK_FAIL:MISSING_LOOP_FOREVER"
 }

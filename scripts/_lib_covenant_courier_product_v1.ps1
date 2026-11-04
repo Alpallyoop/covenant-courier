@@ -135,7 +135,12 @@ function CC-AppendLine([string]$Path,[string]$Line){
   $dir = Split-Path -Parent $Path
   if($dir){ CC-EnsureDir $dir }
   $bytes = (CC-Utf8NoBom).GetBytes($Line + "`n")
-  $fs = [System.IO.File]::Open($Path,[System.IO.FileMode]::Append,[System.IO.FileAccess]::Write,[System.IO.FileShare]::Read)
+  # Exclusive while appending (two writers never interleave or lose a line); retried briefly.
+  $fs = $null
+  for($i = 0; $null -eq $fs; $i++){
+    try { $fs = [System.IO.File]::Open($Path,[System.IO.FileMode]::Append,[System.IO.FileAccess]::Write,[System.IO.FileShare]::None) }
+    catch [System.IO.IOException] { if($i -ge 100){ CC-Fail "CC_APPEND_FAIL:LOCKED" }; Start-Sleep -Milliseconds 50 }
+  }
   try { $fs.Write($bytes,0,$bytes.Length); $fs.Flush($true) } finally { $fs.Dispose() }
 }
 
@@ -206,3 +211,18 @@ function CC-RequireExactProps($Obj,[string[]]$Required,[string[]]$Optional,[stri
 }
 
 function CC-HostExe(){ return ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) }
+
+# A copied private key inherits its folder's permissions; OpenSSH refuses a key others can read
+# ("UNPROTECTED PRIVATE KEY FILE"). Restrict it to the current user (Windows ACL, or mode 0600).
+function CC-RestrictPrivateKey([string]$Path){
+  if($env:OS -eq "Windows_NT"){
+    $acl = New-Object System.Security.AccessControl.FileSecurity
+    $acl.SetAccessRuleProtection($true,$false)
+    $me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    $acl.SetOwner($me)
+    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($me,"FullControl","Allow")))
+    Set-Acl -LiteralPath $Path -AclObject $acl
+  } else {
+    & chmod 600 $Path
+  }
+}

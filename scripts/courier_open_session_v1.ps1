@@ -37,7 +37,20 @@ Require-File (Join-Path $NodeRoot ($SenderNodeId + ".json")) "COURIER_SESSION_FA
 Require-File (Join-Path $NodeRoot ($RecipientNodeId + ".json")) "COURIER_SESSION_FAIL:UNKNOWN_RECIPIENT_NODE"
 Require-File (Join-Path $NetRoot ($NetworkId + ".json")) "COURIER_SESSION_FAIL:UNKNOWN_NETWORK"
 
+foreach($id in @($SessionId,$SenderNodeId,$RecipientNodeId,$NetworkId)){
+  if($id -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,126}[A-Za-z0-9_-]\z|^[A-Za-z0-9]\z' -or $id.Contains("..")){ throw "COURIER_SESSION_FAIL:BAD_ID" }
+}
 $Path = Join-Path $SessRoot ($SessionId + ".json")
+# A session is opened once. Opening it again with the same bindings is a no-op; a closed session stays
+# closed (it is never silently reopened), and a session id is never rebound to other nodes.
+if(Test-Path -LiteralPath $Path){
+  $old = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 | ConvertFrom-Json
+  if([string]$old.status -cne "open"){ throw "COURIER_SESSION_FAIL:SESSION_CLOSED" }
+  if([string]$old.sender_node_id -cne $SenderNodeId -or [string]$old.recipient_node_id -cne $RecipientNodeId -or [string]$old.network_id -cne $NetworkId -or [string]$old.session_role -cne $SessionRole -or [string]$old.session_policy_ref -cne [string]$SessionPolicyRef -or [string]$old.transport_namespace -cne $TransportNamespace){ throw "COURIER_SESSION_FAIL:SESSION_EXISTS_WITH_OTHER_BINDING" }
+  Write-Host ("COURIER_OPEN_SESSION_OK: " + $Path)
+  Write-Host "COURIER_OPEN_SESSION_ALREADY_OPEN"
+  exit 0
+}
 
 $obj = [ordered]@{
   schema = "courier.session_registry.v1"

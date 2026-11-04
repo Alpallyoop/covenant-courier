@@ -1,7 +1,8 @@
-param(
-  [Parameter(Position=0,Mandatory=$true)][string]$Command,
-  [Parameter(ValueFromRemainingArguments=$true)][string[]]$Arguments
-)
+# No param block on purpose: VTP v2 options are "--name value" pairs, and a declared PowerShell
+# parameter set (with its common parameters such as -OutVariable) would capture "--out".
+if($args.Count -lt 1){ throw "VTP2_USAGE: vtp2.ps1 <command> [--name value ...]" }
+$Command = [string]$args[0]
+$Arguments = @($args | Select-Object -Skip 1 | ForEach-Object { [string]$_ })
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"

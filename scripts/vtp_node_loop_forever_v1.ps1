@@ -9,7 +9,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = (Resolve-Path $RepoRoot).Path
-$Vtp = Join-Path $RepoRoot "vtp.ps1"
+$Vtp = Join-Path (Split-Path -Parent $PSScriptRoot) "vtp.ps1"
 $LogDir = Join-Path $RepoRoot "proofs\runtime_logs"
 $LogPath = Join-Path $LogDir ("vtp_node_loop_forever_" + $NodeId + ".log")
 
@@ -21,7 +21,7 @@ while($true){
   $stdout = ""
   $stderr = ""
   try {
-    $out = & ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Vtp node-loop -RepoRoot $RepoRoot -NodeId $NodeId 2>&1
+    $eapPrev = $ErrorActionPreference; $ErrorActionPreference = "Continue"; $out = & ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $Vtp node-loop -RepoRoot $RepoRoot -NodeId $NodeId 2>&1; $ErrorActionPreference = $eapPrev
     $stdout = ($out | Out-String).Trim()
 
     if($LASTEXITCODE -ne 0){

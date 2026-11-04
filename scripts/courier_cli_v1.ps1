@@ -16,7 +16,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $PSExe = ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName)
-$Scripts = Join-Path $RepoRoot "scripts"
+$Scripts = $PSScriptRoot
 
 function Fail([string]$Code){
   throw $Code

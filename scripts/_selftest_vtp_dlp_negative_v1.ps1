@@ -42,7 +42,7 @@ $frame = [ordered]@{
   [Text.UTF8Encoding]::new($false)
 )
 
-$out = & ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $PolicyGate -RepoRoot $RepoRoot -FrameDir $FrameDir 2>&1
+$eapPrev = $ErrorActionPreference; $ErrorActionPreference = "Continue"; $out = & ([Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $PolicyGate -RepoRoot $RepoRoot -FrameDir $FrameDir 2>&1; $ErrorActionPreference = $eapPrev
 $text = ($out | Out-String).Trim()
 $code = $LASTEXITCODE
 

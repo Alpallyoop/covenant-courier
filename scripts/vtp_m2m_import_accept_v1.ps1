@@ -52,6 +52,8 @@ foreach($line in $lines){
   }
   $expected = $matches[1]
   $rel = $matches[2]
+  # Listed files stay inside the bundle: relative, no "..", plain name characters.
+  if($rel -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}\z' -or $rel.Contains("..") -or $rel.Contains("//")){ Fail "VTP_M2M_IMPORT_FAIL:BAD_FILE_NAME" }
   $path = Join-Path $BundleRoot ($rel.Replace('/','\'))
   if(-not (Test-Path -LiteralPath $path -PathType Leaf)){
     Fail ("VTP_M2M_IMPORT_FAIL:MISSING_HASHED_FILE:" + $rel)
@@ -68,7 +70,9 @@ if(-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)){
 }
 $manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
 
-$FrameSource = Join-Path $BundleRoot (([string]$manifest.frame_dir).Replace('/','\'))
+$frameDirRel = [string]$manifest.frame_dir
+if($frameDirRel -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}\z' -or $frameDirRel.Contains("..")){ Fail "VTP_M2M_IMPORT_FAIL:BAD_FRAME_DIR" }
+$FrameSource = Join-Path $BundleRoot ($frameDirRel.Replace('/','\'))
 if(-not (Test-Path -LiteralPath $FrameSource -PathType Container)){
   Fail "VTP_M2M_IMPORT_FAIL:MISSING_FRAME_DIR"
 }

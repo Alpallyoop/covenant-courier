@@ -1,14 +1,23 @@
 # VTP v2 Security Protocol
 
-Status: implementation target. VTP v1 is not security-compatible with v2.
+Status: implementation target. VTP v1 is not security-compatible with v2. Revision 2.1 (2026-11-01) adds
+the in-session DH ratchet (section 6.1); its envelopes and handshakes are `vtp.message.v3` and
+`vtp.session_init.v3` (a 2.0 peer refuses them as an unsupported schema), and sessions created
+before 2.1 are refused and dropped from the state on the next save, so they must be re-established.
 
 ## 1. Scope and claims
 
 VTP v2 is an asynchronous, offline-capable, one-to-one encrypted messaging protocol.
 It provides authenticated device identity, confidentiality and integrity of message content
-and protected metadata, replay rejection, and forward secrecy after message-key deletion.
-Post-compromise recovery requires an explicit new authenticated session establishment using
-fresh uncompromised prekey material; v2.0 does not claim an in-session DH double ratchet.
+and protected metadata, replay rejection, forward secrecy after message-key deletion, and
+in-session post-compromise recovery against a passive adversary through a DH ratchet (section 6.1):
+once both devices have used ratchet keys generated after a state compromise, a copy of the compromised
+state no longer decrypts. Until then the copy still reads the compromised device's current receiving
+chain and any skipped keys it holds. An active adversary holding a copy can instead inject a message
+with its own ratchet key and keep a man-in-the-middle position (inherent to the Double Ratchet); the
+real device's messages then fail at its peer, so the session visibly breaks and must be closed
+(`session-close`) and re-established.
+The implementation has not been independently reviewed (see section 11).
 
 It does not hide IP addresses, packet timing, packet length, device compromise, traffic
 volume, or the existence of a relationship. It is not a certification for classified use.
@@ -90,16 +99,54 @@ Each direction has an independent chain key and counter. For every message:
     message_key = HMAC-SHA256(chain_key, 0x01)
     next_chain  = HMAC-SHA256(chain_key, 0x02)
 
-The old chain and message keys are zeroed and not persisted. Each envelope authenticates
+Old chain keys are replaced in the state and message keys are not persisted, except skipped keys
+(below). The implementation holds keys in managed memory (.NET strings and JSON buffers), so in-memory
+zeroization is best effort; deleted keys can also survive in old copies of the state file (backups,
+journals, SSD remnants) together with a later leak of the state protection key (section 8). Each envelope authenticates
 the schema, suite, session ID, sender and recipient device IDs, message number, message ID,
 creation time, expiry, content type, nonce, and ciphertext length as AEAD associated data (the
-canonical encoding of every envelope field except `ciphertext_b64` and `tag_b64`). v2.0 has no
-in-session DH ratchet, so there is no ratchet public key or previous-chain-length field.
+canonical encoding of every envelope field except `ciphertext_b64` and `tag_b64`), including the
+sender's ratchet public key and previous chain length (section 6.1).
 
-Skipped message keys are bounded to 100 per receiving chain in total (not merely per gap)
-and are protected at rest with the rest of the state. A new
-session handshake replaces both chains and the root using fresh ephemeral and one-time
-prekey contributions. Operators must refresh a session after suspected compromise.
+Skipped message keys are keyed by (SHA-256 of the sender's ratchet public key, message number) and
+protected at rest with the rest of the state. At most 1000 are derived for one gap (a larger gap or
+announced previous-chain remainder is refused, `VTP2_SKIP_LIMIT`); at most 2000 are kept per session,
+the oldest evicted first; each is deleted when used or once older than the message lifetime plus skew
+(its message would be refused as expired). A lost message therefore never blocks a session. A new session handshake replaces both chains and the root using fresh
+ephemeral and one-time prekey contributions.
+
+### 6.1 In-session DH ratchet (2.1)
+
+Each device holds a current P-256 ratchet key pair; every envelope carries the sender's ratchet
+public key (`ratchet_public_b64`, SPKI) and `previous_chain_length` (the number of messages it sent
+on its previous sending chain). With `RK` the root key and
+
+    KDF_RK(RK, dh) = HKDF-SHA256(ikm = dh, salt = RK, info = "VTP2 ratchet", 64 bytes) -> (RK', CK)
+
+the session starts as follows (`RK0`, `CK-i2r`, `CK-r2i` from section 5):
+
+- Responder: ratchet key pair = its signed prekey `SPK-B`; sending chain `CK-r2i`; no receiving
+  chain until the initiator's first message. It may send immediately. The session holds a copy of the
+  SPK private key until its first ratchet step, so an SPK outlives its rotation in sessions whose
+  initiator never sends; the initial secret also needs the consumed one-time prekey.
+- Initiator: peer ratchet key = `SPK-B` (from the bundle it validated); receiving chain `CK-r2i`;
+  it generates ratchet key pair `R-A1` and sets `(RK1, CKs) = KDF_RK(RK0, ECDH(R-A1, SPK-B))`.
+  `CK-i2r` is not used.
+
+When a message arrives whose ratchet public key differs from the stored peer key, the receiver
+first keeps the message keys still owed on its current receiving chain up to the announced
+`previous_chain_length` (counted in the skipped-key bound), then steps:
+
+    (RK, CKr) = KDF_RK(RK, ECDH(own ratchet key, new peer key));  Nr = 0
+    PN = Ns;  Ns = 0;  own ratchet key = new key pair
+    (RK, CKs) = KDF_RK(RK, ECDH(new own key, new peer key))
+
+Message keys within a chain follow section 6. Every change is made on the loaded state and saved
+only after the AEAD check of the message passes, so a forged or corrupted message (including a
+forged ratchet key, which is associated data) changes nothing. Each completed round trip brings
+fresh DH contributions from both devices: a copy of a device's state stops decrypting as soon as
+both sides have used ratchet keys created after the copy was taken. A session saved by a version
+without the ratchet is refused with `VTP2_SESSION_LEGACY_REKEY_REQUIRED`.
 
 State advancement is protected by an exclusive lock and atomic replace. Encryption reserves
 and commits a message number before returning an envelope, preventing nonce/key reuse after
@@ -115,15 +162,22 @@ crash. Decryption commits replay state before releasing plaintext.
 - Envelope maximum is 1 MiB; plaintext maximum is 782,336 bytes (768 KiB minus 4 KiB, so the
   base64 envelope always fits); an envelope that would exceed 1 MiB is refused before a message
   number is used; JSON depth maximum is 16.
-- Counter exhaustion, skipped-key limit, malformed base64, invalid curve points, and state
-  rollback indicators fail closed.
+- Counter exhaustion, skipped-key limit, malformed base64 and invalid curve points fail closed.
+  Every public key is accepted only as an uncompressed P-256 point under the named-curve OID (91 bytes
+  of SPKI). There is no detection of a whole-state rollback (restoring an older state file re-opens
+  replays of messages it had not yet seen); protect state backups accordingly.
+- The device state may grow to 64 MiB; `session-close` deletes a session and all its keys.
+- Decryption writes the plaintext next to the output path first and moves it into place after the
+  state is saved; an output path that is a directory is refused before anything is consumed.
 
 ## 8. Storage and deletion
 
 Private identity keys, prekeys, session roots, chain keys, skipped keys, and replay journals
 are stored only inside protected state (section 4). State files are created owner-only
 (mode 0600) on Unix; on Windows they inherit the user profile ACL and are DPAPI-bound to the user.
-Writes use a same-directory temporary file, flush-to-disk, and atomic replacement. Plaintext
+Writes use a same-directory temporary file, flush-to-disk, and atomic replacement. Concurrent commands
+are serialised by a lock file next to the state path; two different spellings of the same file through a
+symlink take different locks, so callers must use one canonical state path. Plaintext
 is returned to the caller or written only to an explicitly selected output path; transport
 spools contain encrypted envelopes only.
 
@@ -140,4 +194,12 @@ Release verification must include deterministic primitive vectors, two-device ha
 offline bidirectional and out-of-order delivery, concurrent send serialization, replay,
 tampering of every authenticated field, wrong identity, changed pin, expired bundle/message,
 consumed OPK, oversized/truncated/malformed inputs, state corruption, path traversal, and
-proof that transport spools contain none of the test plaintext.
+proof that transport spools contain none of the test plaintext; for the ratchet: keys rotate per
+round trip, out-of-order delivery across ratchet steps, post-compromise recovery against a copied
+state, a forged ratchet key refused without a state change, the responder sending first.
+
+## 11. Review status
+
+The protocol and the implementation (`src/Vtp2/Program.cs`) have had internal review only. An
+independent cryptographic review is required before VTP v2 is used where confidentiality matters
+to an adversary; until then `SECURITY.md` treats it as a developer preview.
