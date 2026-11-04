@@ -42,6 +42,16 @@
   is created owner-only; `vtp_udp_wire_listen_once_v1.ps1` (unused, unvalidated) removed; the VTP policy gate
   fails closed on empty allow-lists or unreadable JSON.
 
+- Receivers verify Covenant Gate's own signed decision for gate-required profiles (`covenant_gate_decision`
+  in the delivery envelope; `RECEIVER_GATE_DECISION_MISSING`, `RECEIVER_GATE_DECISION_INVALID:<token>`,
+  `RECEIVER_GATE_DENY`); invoke mode has the pinned Covenant Gate sign its allow (`cg_sign_decision_v1.ps1`),
+  else a required gate waits (`COVENANT_GATE_DECISION_UNSIGNED`). `confidential` names the signer
+  `single-tenant/device_agent/covenant-gate`.
+- `cg-pin` also pins the Covenant Gate policy hash (probed, or `-PolicyHash`) and the decision signer scripts;
+  decisions under another policy are refused.
+- Signed receipt chain head (`covenant_courier.receipt_chain_head.v1`, receipt signer `courier-receipts@local`);
+  consistent rewrites, forged or dropped heads are refused.
+
 ### Tests
 
 - New `_selftest_courier_receive_policy_v1.ps1` (forged allow, forged notification, re-framed replay, unchained

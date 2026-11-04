@@ -14,6 +14,8 @@ param(
   [string]$OutDir,
   [string]$CovenantGateRoot,
   [string]$CovenantGateDecisionPath,
+  # cg-pin
+  [string]$PolicyHash,
   # trust-import
   [string]$TrustBundlePath,
   [string]$ExpectedSha256,
@@ -71,7 +73,8 @@ if($Command -eq "help"){
   Write-Host "  .\courier.ps1 send [-PayloadText ..] [-PolicyProfile ..]"
   Write-Host "  .\courier.ps1 deliver -MessagePath <message.json> -PayloadPath <payload> [-OutDir ..]"
   Write-Host "                        [-CovenantGateRoot <dir> | -CovenantGateDecisionPath <doc>]"
-  Write-Host "  .\courier.ps1 cg-pin -CovenantGateRoot <dir>   pin the Covenant Gate checkout invoke mode may run"
+  Write-Host "  .\courier.ps1 cg-pin (-CovenantGateRoot <dir> | -PolicyHash <hex>)"
+  Write-Host "                        pin the Covenant Gate checkout invoke mode may run and the policy its decisions must carry"
   Write-Host "  .\courier.ps1 secure-session -SessionId <id> (-LocalPair | -Vtp2SessionId <hex> -SenderFingerprint <hex> -RecipientFingerprint <hex>)"
   Write-Host "                        bind a Courier session to a VTP v2 session (payload_encryption vtp2)"
   Write-Host "  .\courier.ps1 receive"
@@ -142,8 +145,11 @@ if($Command -eq "receipts"){
 }
 
 if($Command -eq "cg-pin"){
-  if([string]::IsNullOrWhiteSpace($CovenantGateRoot)){ throw "COURIER_CG_PIN_USAGE:CovenantGateRoot_required" }
-  Run-PS (Join-Path $Scripts "courier_covenant_gate_pin_v1.ps1") @("-RepoRoot",$RepoRoot,"-CovenantGateRoot",$CovenantGateRoot)
+  if([string]::IsNullOrWhiteSpace($CovenantGateRoot) -and [string]::IsNullOrWhiteSpace($PolicyHash)){ throw "COURIER_CG_PIN_USAGE:CovenantGateRoot_or_PolicyHash_required" }
+  $a = @("-RepoRoot",$RepoRoot)
+  if(-not [string]::IsNullOrWhiteSpace($CovenantGateRoot)){ $a += @("-CovenantGateRoot",$CovenantGateRoot) }
+  if(-not [string]::IsNullOrWhiteSpace($PolicyHash)){ $a += @("-PolicyHash",$PolicyHash) }
+  Run-PS (Join-Path $Scripts "courier_covenant_gate_pin_v1.ps1") $a
   exit 0
 }
 

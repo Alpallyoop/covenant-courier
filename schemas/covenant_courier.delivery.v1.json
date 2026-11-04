@@ -28,6 +28,17 @@
       "type": "string",
       "contentEncoding": "base64"
     },
+    "covenant_gate_decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decision_b64", "signature_b64", "signer"],
+      "description": "Present when Covenant Gate allowed the delivery and signed its decision. decision_b64: the exact covenantgate.eval_output.v1 bytes; signature_b64: the ssh-keygen -Y sign signature over them (namespace covenant-gate/decision); signer: the profile's covenant_gate_signer. A receiver whose own profile requires the gate refuses an envelope without it, and checks signer, input_hash (rebuilt from the message), decision allow and the pinned policy_hash.",
+      "properties": {
+        "decision_b64": { "type": "string", "contentEncoding": "base64" },
+        "signature_b64": { "type": "string", "contentEncoding": "base64" },
+        "signer": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9@._/+-]{0,199}$" }
+      }
+    },
     "payload_vtp2_b64": {
       "type": "string",
       "contentEncoding": "base64",

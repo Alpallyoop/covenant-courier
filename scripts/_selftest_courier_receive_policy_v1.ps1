@@ -9,10 +9,14 @@ param(
 #   3. a sender-chosen notification (full_safe preview) is replaced by the receiver's
 #   4. an accepted frame re-framed under a new frame id is a replay (same signed payload)
 #   5. a receipt log with unchained lines is not used
+#   6. Covenant Gate on receive (a "gated" profile requiring the gate): an envelope without a gate decision,
+#      with one signed by the node key, with one for another message or under another gate policy is
+#      refused; a delivery with a Covenant Gate-signed allow (document mode) is received
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "_lib_covenant_courier_product_v1.ps1")
+. (Join-Path $PSScriptRoot "_lib_courier_covenant_gate_v1.ps1")
 
 $RepoRoot = (Resolve-Path $RepoRoot).Path
 $PS = CC-HostExe
@@ -53,13 +57,13 @@ $Cases++; Write-Host "COURIER_RECEIVE_POLICY_CASE_OK: honest delivery -> receive
 
 # A delivery envelope built and signed by hand with the node key (what a holder of that key can do),
 # framed with the real transport and logged as "sent".
-function Forge([string]$Id,[string]$PayloadText,[string]$Mode,[string]$Preview){
+function Forge([string]$Id,[string]$PayloadText,[string]$Mode,[string]$Preview,[string]$Profile = "default",[scriptblock]$Gate = $null){
   $bytes = (CC-Utf8NoBom).GetBytes($PayloadText)
   $sha = CC-Sha256Bytes $bytes
   $dir = Join-Path $Run ("forge-" + $Id); CC-EnsureDir $dir
   $m = [ordered]@{
     schema = "covenant_courier.message.v1"; message_id = $Id; sender_identity = "local/sender/demo"; recipient_identity = "local/recipient/demo"
-    sender_node_id = "node-alpha"; recipient_node_id = "node-beta"; session_id = "session-alpha-beta-001"; policy_profile = "default"
+    sender_node_id = "node-alpha"; recipient_node_id = "node-beta"; session_id = "session-alpha-beta-001"; policy_profile = $Profile
     notification_preview = $Preview; payload_sha256 = $sha; created_utc = (CC-UtcNow); origin = "human"
   }
   $envelope = [ordered]@{
@@ -68,6 +72,7 @@ function Forge([string]$Id,[string]$PayloadText,[string]$Mode,[string]$Preview){
     notification = [ordered]@{ schema = "covenant_courier.notification.v1"; message_id = $Id; recipient_identity = "local/recipient/demo"; display_mode = $Mode; preview = $Preview; created_utc = (CC-UtcNow) }
     payload_b64 = [Convert]::ToBase64String($bytes)
   }
+  if($null -ne $Gate){ $envelope["covenant_gate_decision"] = (& $Gate $m $sha $dir) }
   $dp = Join-Path $dir "delivery.json"
   [void](CC-WriteDocument $dp $envelope)
   $s = Child (S "courier_sign_message_v1.ps1") @("-RepoRoot",$Sandbox,"-MessagePath",$dp,"-SignerIdentity",$principal,"-Namespace","courier/message")
@@ -119,6 +124,69 @@ CC-AppendLine $Log (CC-ToJson ([ordered]@{ schema = "covenant_courier.product_re
 $r = Receive
 Must ($r.Code -ne 0 -and $r.Text -match "RECEIPT_LOG_HAS_UNCHAINED_LINES") ("UNCHAINED:" + $r.Text)
 $Cases++; Write-Host "COURIER_RECEIVE_POLICY_CASE_OK: unchained receipt line -> log not used"
+
+# 6. Covenant Gate on receive
+$GateSigner = "covenant-gate-selftest@local"
+$gk = Join-Path $Sandbox "proofs\keys\courier_covenant-gate-selftest_local_ed25519"
+$kgExe = $(if($env:WINDIR -and (Test-Path -LiteralPath (Join-Path $env:WINDIR "System32\OpenSSH\ssh-keygen.exe"))){ Join-Path $env:WINDIR "System32\OpenSSH\ssh-keygen.exe" } else { (Get-Command ssh-keygen -ErrorAction Stop).Source })
+$kp = Start-Process -FilePath $kgExe -ArgumentList ('-q -t ed25519 -N "" -C "gate" -f "' + $gk + '"') -Wait -PassThru -NoNewWindow
+Must ($kp.ExitCode -eq 0) "GATE_KEYGEN"
+CC-RestrictPrivateKey $gk
+$gpub = @(([IO.File]::ReadAllText($gk + ".pub")).Trim() -split ' ')
+[IO.File]::AppendAllText((Join-Path $Sandbox "proofs\trust\allowed_signers"),($GateSigner + ' namespaces="covenant-gate/decision" ' + $gpub[0] + " " + $gpub[1] + "`n"))
+$polPath = Join-Path $Sandbox "policy\courier_product_policy_v1.json"
+$pol = CC-ReadJsonFile $polPath
+$gated = CC-ParseJson (CC-ToCanonicalJson $pol.profiles.default)
+$gated.covenant_gate = "required"
+$gated | Add-Member -NotePropertyName "covenant_gate_signer" -NotePropertyValue $GateSigner
+$pol.profiles | Add-Member -NotePropertyName "gated" -NotePropertyValue $gated
+[void](CC-WriteDocument $polPath (CC-ToOrderedTree $pol))
+$r = Child (S "courier_covenant_gate_pin_v1.ps1") @("-RepoRoot",$Sandbox,"-PolicyHash",("a" * 64)); Must ($r.Code -eq 0) ("PIN:" + $r.Text)
+
+# A Covenant Gate decision for message $M, signed with $Key (as $Principal).
+function GateDecision($M,[string]$Sha,[string]$Dir,[string]$Key,[string]$SignerName,[string]$PolicyHash = ("a" * 64),[string]$ForMessageId = $null){
+  $mm = CC-ParseJson (CC-ToJson $M)
+  if($ForMessageId){ $mm.message_id = $ForMessageId }
+  $ih = CCG-InputHash (CCG-BuildEvalInput $mm $Sha "courier-local@covenant" "courier-local@covenant")
+  $doc = [ordered]@{ schema = "covenantgate.eval_output.v1"; decision = "allow"; reason_codes = @("ALLOW_RULE_MATCHED"); policy_hash = $PolicyHash; input_hash = $ih; engine_version = "covenantgate.eval.v1"; evaluation_id = (CC-Sha256Text ($PolicyHash + "`n" + $ih + "`n" + "covenantgate.eval.v1")); matched_rules = [ordered]@{ allow = @(); deny = @() } }
+  $p = Join-Path $Dir ("gate-" + [guid]::NewGuid().ToString("N").Substring(0,8) + ".json")
+  CC-WriteTextFile $p ((CC-ToCanonicalJson $doc) + "`n")
+  $k = Start-Process -FilePath $kgExe -ArgumentList ('-Y sign -f "' + $Key + '" -n covenant-gate/decision "' + $p + '"') -Wait -PassThru -NoNewWindow
+  Must ($k.ExitCode -eq 0) "GATE_SIGN"
+  return [ordered]@{ decision_b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($p)); signature_b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($p + ".sig")); signer = $SignerName }
+}
+$nodeKey = Join-Path $Sandbox "proofs\keys\courier_courier-local_covenant_ed25519"
+$gateCases = @(
+  @("no-decision", $null, "RECEIVER_GATE_DECISION_MISSING"),
+  @("signed-by-node-key", { param($m,$sha,$dir) GateDecision $m $sha $dir $nodeKey $GateSigner }, "RECEIVER_GATE_DECISION_INVALID:CG_DOCUMENT_UNTRUSTED_SIGNER"),
+  @("other-message", { param($m,$sha,$dir) GateDecision $m $sha $dir $gk $GateSigner ("a" * 64) "ccmsg-some-other" }, "RECEIVER_GATE_DECISION_INVALID:CG_INPUT_HASH_MISMATCH"),
+  @("other-gate-policy", { param($m,$sha,$dir) GateDecision $m $sha $dir $gk $GateSigner ("c" * 64) }, "RECEIVER_GATE_DECISION_INVALID:CG_POLICY_HASH_NOT_PINNED")
+)
+foreach($g in $gateCases){
+  Start-Sleep -Milliseconds 1100
+  $id = "ccmsg-gate-" + $g[0]
+  [void](Forge $id "nothing restricted here" "minimal" "" "gated" $g[1])
+  $r = Receive
+  Must ($r.Code -ne 0 -and $r.Text -match [regex]::Escape($g[2])) ("GATE_" + $g[0] + ":" + $r.Text)
+  Must (-not (Test-Path -LiteralPath (Inbox $id))) ("GATE_NOT_IN_INBOX_" + $g[0])
+  $Cases++; Write-Host ("COURIER_RECEIVE_POLICY_CASE_OK: gated profile, " + $g[0] + " -> " + $g[2])
+}
+
+# The honest path: deliver with a Covenant Gate-signed allow (document mode), then receive.
+Start-Sleep -Milliseconds 1100
+$r = Child (S "courier_prepare_message_v1.ps1") @("-RepoRoot",$Sandbox,"-From","local/sender/demo","-To","local/recipient/demo","-RecipientNodeId","node-beta","-SessionId","session-alpha-beta-001","-PolicyProfile","gated","-PayloadText","board minutes","-Origin","human")
+Must ($r.Code -eq 0) ("PREPARE_GATED:" + $r.Text)
+foreach($l in ($r.Text -split "`n")){ if($l -match 'COURIER_PREPARE_MESSAGE_OK:\s+(.+)$'){ $msg = $Matches[1].Trim() }; if($l -match 'COURIER_PREPARE_PAYLOAD_OK:\s+(.+)$'){ $pay = $Matches[1].Trim() } }
+$gm = CC-ReadJsonFile $msg
+$gdir = Join-Path $Run "gated"; CC-EnsureDir $gdir
+$gd = GateDecision $gm ([string]$gm.payload_sha256) $gdir $gk $GateSigner
+$gdoc = Join-Path $gdir "decision.json"
+[IO.File]::WriteAllBytes($gdoc,[Convert]::FromBase64String($gd.decision_b64)); [IO.File]::WriteAllBytes(($gdoc + ".sig"),[Convert]::FromBase64String($gd.signature_b64))
+$r = Child (S "courier_deliver_v1.ps1") @("-RepoRoot",$Sandbox,"-MessagePath",$msg,"-PayloadPath",$pay,"-OutDir",(Join-Path $gdir "out"),"-CovenantGateDecisionPath",$gdoc)
+Must ($r.Code -eq 0) ("DELIVER_GATED:" + $r.Text)
+$r = Receive
+Must ($r.Code -eq 0 -and $r.Text -match "COURIER_RECEIVE_COVENANT_GATE_VERIFIED") ("RECEIVE_GATED:" + $r.Text)
+$Cases++; Write-Host "COURIER_RECEIVE_POLICY_CASE_OK: gated profile, Covenant Gate-signed allow -> verified on receive and received"
 
 Remove-Item -LiteralPath (Join-Path $Sandbox "proofs\keys") -Recurse -Force
 Write-Host ("COURIER_RECEIVE_POLICY_SELFTEST_CASES: " + $Cases)

@@ -200,6 +200,9 @@ if($null -eq $profile){
           $cg = Invoke-CourierCovenantGate -RepoRoot $RepoRoot -Message $message -PayloadSha256 $actualPayloadSha -SenderPrincipal ([string]$senderNode.principal) -RecipientPrincipal ([string]$recipientNode.principal) -WorkDir (Join-Path $OutDir "covenant_gate") -CovenantGateRoot $CovenantGateRoot -DecisionDocumentPath $CovenantGateDecisionPath -DocumentSigner $signer
           Write-Host ("COVENANT_COURIER_DELIVER_COVENANT_GATE: mode=" + $cg.Mode + " outcome=" + $cg.Outcome + " decision=" + $cg.Decision + " token=" + $cg.Token)
           if($cg.Consulted -and $cg.Decision -eq "deny"){ Decide "reject" ("COVENANT_GATE_DENY:" + ((@($cg.ReasonCodes) -join ",") -replace '[^A-Z0-9_,]','_')) }
+          # The receiver checks Covenant Gate's decision itself: a required gate needs an allow signed by
+          # Covenant Gate (document mode, or invoke mode with Covenant Gate's decision signer) to travel.
+          elseif($cg.Consulted -and $gateMode -eq "required" -and $null -eq $cg.SignatureBytes){ Decide "require_approval" "COVENANT_GATE_REQUIRED:COVENANT_GATE_DECISION_UNSIGNED" }
           elseif(-not $cg.Consulted){
             if($cg.Outcome -eq "refused"){ Decide "reject" ("COVENANT_GATE_REFUSED:" + $cg.Token) }
             elseif($gateMode -eq "required"){ Decide "require_approval" ("COVENANT_GATE_REQUIRED:" + $cg.Token) }
@@ -275,6 +278,13 @@ try {
   # The sender's free-text preview travels only when the recipient is meant to see it (full_safe): a
   # redacted, generic or minimal notification must not leave it readable in the envelope.
   if($displayMode -cne "full_safe"){ $envelope.message["notification_preview"] = "" }
+  if($null -ne $cg -and $cg.Consulted -and $cg.Decision -eq "allow" -and $null -ne $cg.SignatureBytes){
+    $envelope["covenant_gate_decision"] = [ordered]@{
+      decision_b64 = [Convert]::ToBase64String([byte[]]$cg.DecisionBytes)
+      signature_b64 = [Convert]::ToBase64String([byte[]]$cg.SignatureBytes)
+      signer = [string]$profile.covenant_gate_signer
+    }
+  }
   if($null -ne $vtp2Binding){
     # The sender's free-text preview is not part of the encrypted payload: it is not carried at all
     # (the recipient sees the notification document, built from the profile's display mode).

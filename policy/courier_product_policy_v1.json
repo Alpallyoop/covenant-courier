@@ -36,6 +36,7 @@
       "restricted_action": "reject",
       "notification_display_mode": "minimal",
       "covenant_gate": "required",
+      "covenant_gate_signer": "single-tenant/device_agent/covenant-gate",
       "payload_encryption": "vtp2"
     }
   }

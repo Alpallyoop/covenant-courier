@@ -37,7 +37,9 @@ Copy-Item -LiteralPath (Join-Path $RepoRoot "policy\courier_product_policy_v1.js
 Copy-Item -LiteralPath (Join-Path $RepoRoot "policies\lexicon") -Destination (Join-Path $Sandbox "policies") -Recurse -Force
 Copy-Item -Path (Join-Path $RepoRoot "proofs\keys\courier_courier-local_covenant_ed25519*") -Destination (Join-Path $Sandbox "proofs\keys") -Force
 CC-RestrictPrivateKey (Join-Path $Sandbox "proofs\keys\courier_courier-local_covenant_ed25519")
-Copy-Item -LiteralPath (Join-Path $RepoRoot "proofs\trust\allowed_signers") -Destination (Join-Path $Sandbox "proofs\trust") -Force
+# This machine's signer lines, without its receipt signer (the sandbox makes its own).
+$sbAllowed = @([IO.File]::ReadAllLines((Join-Path $RepoRoot "proofs\trust\allowed_signers")) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and @($_.Trim() -split '\s+')[0] -cne "courier-receipts@local" })
+[IO.File]::WriteAllText((Join-Path $Sandbox "proofs\trust\allowed_signers"),(($sbAllowed -join "`n") + "`n"))
 $r = Child (Join-Path $PSScriptRoot "courier_seed_demo_registry_v1.ps1") @("-RepoRoot",$Sandbox); Must ($r.Code -eq 0) "SEED"
 $r = Child (Join-Path $PSScriptRoot "courier_open_session_v1.ps1") @("-RepoRoot",$Sandbox,"-SessionId","session-alpha-beta-001","-SenderNodeId","node-alpha","-RecipientNodeId","node-beta","-NetworkId","courier-internal-net-v1","-SessionRole","message-delivery"); Must ($r.Code -eq 0) "OPEN_SESSION"
 $r = Child (Join-Path $PSScriptRoot "courier_open_session_v1.ps1") @("-RepoRoot",$Sandbox,"-SessionId","session-closed-001","-SenderNodeId","node-alpha","-RecipientNodeId","node-beta","-NetworkId","courier-internal-net-v1","-SessionRole","message-delivery"); Must ($r.Code -eq 0) "OPEN_SESSION_2"
@@ -56,7 +58,7 @@ $gpub = @(([IO.File]::ReadAllText($gk + ".pub")).Trim() -split ' ')
 # Test policy (inside the sandbox's policy folder: deliver refuses a policy file from anywhere else):
 # the confidential profile names the Covenant Gate decision signer.
 $pol = CC-ReadJsonFile (Join-Path $Sandbox "policy\courier_product_policy_v1.json")
-$pol.profiles.confidential | Add-Member -NotePropertyName "covenant_gate_signer" -NotePropertyValue $GateSigner
+$pol.profiles.confidential.covenant_gate_signer = $GateSigner
 # Gate cases test the gate alone; VTP v2 payload encryption is tested through its own "sealed" profile.
 $pol.profiles.confidential.payload_encryption = "none"
 $sealed = CC-ParseJson (CC-ToCanonicalJson $pol.profiles.default)
@@ -230,11 +232,11 @@ Expect (Deliver $c @("-CovenantGateRoot",(Join-Path $Run "no-covenant-gate-here"
 $last = @(Get-Content -LiteralPath $cirPath)[-1] | ConvertFrom-Json
 Must ([string]$last.outcome -eq "unavailable" -and [string]$last.error_token -eq "COVENANT_GATE_UNAVAILABLE") "CIR_UNAVAILABLE_WRITTEN"
 
-function New-GateDoc($Case,[string]$Decision,[switch]$WrongInput,[switch]$NoSign){
+function New-GateDoc($Case,[string]$Decision,[switch]$WrongInput,[switch]$NoSign,[string]$PolicyHash = ("a" * 64)){
   $msg = CC-ReadJsonFile $Case.Message
   $inputHash = CCG-InputHash (CCG-BuildEvalInput $msg $Case.Obj.payload_sha256 "courier-local@covenant" "courier-local@covenant")
   if($WrongInput){ $inputHash = ("1" * 64) }
-  $policyHash = ("a" * 64)
+  $policyHash = $PolicyHash
   $doc = [ordered]@{
     schema = "covenantgate.eval_output.v1"; decision = $Decision; reason_codes = @($(if($Decision -eq "allow"){ "ALLOW_RULE_MATCHED" } else { "DENY_RULE_MATCHED" }))
     policy_hash = $policyHash; input_hash = $inputHash; engine_version = "covenantgate.eval.v1"
@@ -250,10 +252,21 @@ function New-GateDoc($Case,[string]$Decision,[switch]$WrongInput,[switch]$NoSign
   return $p
 }
 
+# Decisions count only under the pinned Covenant Gate policy.
 $c = New-Case "confidential" "board minutes"
-Expect (Deliver $c @("-CovenantGateDecisionPath",(New-GateDoc $c "allow"))) 0 "sent" "POLICY_ALLOW" "gate-document-allow"
+Expect (Deliver $c @("-CovenantGateDecisionPath",(New-GateDoc $c "allow"))) 42 "rejected" "COVENANT_GATE_REFUSED:CG_POLICY_NOT_PINNED" "gate-document-policy-not-pinned"
+$r = Child (Join-Path $PSScriptRoot "courier_covenant_gate_pin_v1.ps1") @("-RepoRoot",$Sandbox,"-PolicyHash",("a" * 64)); Must ($r.Code -eq 0) ("PIN_POLICY:" + $r.Text)
+$c = New-Case "confidential" "board minutes"
+Expect (Deliver $c @("-CovenantGateDecisionPath",(New-GateDoc $c "allow" -PolicyHash ("c" * 64)))) 42 "rejected" "COVENANT_GATE_REFUSED:CG_POLICY_HASH_NOT_PINNED" "gate-document-other-policy"
+
+$c = New-Case "confidential" "board minutes"
+$gdoc = New-GateDoc $c "allow"
+$res = Deliver $c @("-CovenantGateDecisionPath",$gdoc)
+Expect $res 0 "sent" "POLICY_ALLOW" "gate-document-allow"
 $last = @(Get-Content -LiteralPath $cirPath)[-1] | ConvertFrom-Json
 Must ([string]$last.outcome -eq "ok" -and $null -eq $last.error_token) "CIR_OK_WRITTEN"
+$envG = CC-ReadJsonFile (Join-Path $res.Out "delivery.json")
+Must ((CC-HasProp $envG "covenant_gate_decision") -and [string]$envG.covenant_gate_decision.signer -eq $GateSigner -and (CC-Sha256Bytes ([Convert]::FromBase64String([string]$envG.covenant_gate_decision.decision_b64))) -eq (CC-Sha256File $gdoc)) "GATE_DECISION_CARRIED"
 
 $c = New-Case "confidential" "board minutes"
 Expect (Deliver $c @("-CovenantGateDecisionPath",(New-GateDoc $c "deny"))) 42 "rejected" "COVENANT_GATE_DENY:DENY_RULE_MATCHED" "gate-document-deny"
@@ -270,17 +283,43 @@ $t = [IO.File]::ReadAllText($doc).Replace('ALLOW_RULE_MATCHED','ALLOW_RULE_EDITE
 [IO.File]::WriteAllText($doc,$t)
 Expect (Deliver $c @("-CovenantGateDecisionPath",$doc)) 42 "rejected" "COVENANT_GATE_REFUSED:CG_DOCUMENT_SIGNATURE_INVALID" "gate-document-tampered"
 
-# Invoke mode runs only a pinned Covenant Gate checkout, and only while its files match the pin.
+# Invoke mode runs only a pinned Covenant Gate checkout, and only while its files match the pin. The stub
+# evaluator answers allow (policy "b"*64) in Covenant Gate's output form; its decision signer signs with
+# the test gate key, so the delivery carries a gate-signed decision.
 $stub = Join-Path $Run "stub-covenant-gate"
 CC-EnsureDir (Join-Path $stub "scripts"); CC-EnsureDir (Join-Path $stub "policy")
 CC-WriteTextFile (Join-Path $stub "policy\canonical.base.v1.json") '{"schema":"covenantgate.policy.v1"}'
-CC-WriteTextFile (Join-Path $stub "scripts\_lib_covenantgate_eval_v1.ps1") @'
-function CG-EvalV1($Base,$Overlay,$In){ return [ordered]@{ decision = "allow" } }
-function CG-ToCanonJson($o){ return ($o | ConvertTo-Json -Compress) }
-'@
+CC-WriteTextFile (Join-Path $stub "scripts\_lib_covenantgate_eval_v1.ps1") ((@'
+. '__LIB__'
+function CG-EvalV1($Base,$Overlay,$In){
+  $ih = CC-Sha256Text ((CC-ToCanonicalJson $In) + "`n"); $ph = ("b" * 64)
+  return [ordered]@{ schema = "covenantgate.eval_output.v1"; decision = "allow"; reason_codes = @("ALLOW_RULE_MATCHED"); policy_hash = $ph; input_hash = $ih; engine_version = "covenantgate.eval.v1"; evaluation_id = (CC-Sha256Text ($ph + "`n" + $ih + "`n" + "covenantgate.eval.v1")); matched_rules = [ordered]@{ allow = @(); deny = @() } }
+}
+function CG-ToCanonJson($o){ return (CC-ToCanonicalJson $o) }
+'@).Replace("__LIB__",(Join-Path $PSScriptRoot "_lib_covenant_courier_product_v1.ps1")))
 $c = New-Case "confidential" "board minutes"
 Expect (Deliver $c @("-CovenantGateRoot",$stub)) 42 "quarantined" "REQUIRE_APPROVAL:COVENANT_GATE_REQUIRED:COVENANT_GATE_ROOT_NOT_PINNED" "gate-invoke-unpinned-root-not-run"
-$r = Child (Join-Path $PSScriptRoot "courier_covenant_gate_pin_v1.ps1") @("-RepoRoot",$Sandbox,"-CovenantGateRoot",$stub); Must ($r.Code -eq 0) ("PIN_STUB:" + $r.Text)
+$r = Child (Join-Path $PSScriptRoot "courier_covenant_gate_pin_v1.ps1") @("-RepoRoot",$Sandbox,"-CovenantGateRoot",$stub); Must ($r.Code -eq 0 -and $r.Text -match ("COURIER_COVENANT_GATE_PIN_POLICY_HASH: " + ("b" * 64))) ("PIN_STUB:" + $r.Text)
+$c = New-Case "confidential" "board minutes"
+Expect (Deliver $c @("-CovenantGateRoot",$stub)) 42 "quarantined" "REQUIRE_APPROVAL:COVENANT_GATE_REQUIRED:COVENANT_GATE_DECISION_UNSIGNED" "gate-invoke-allow-without-gate-signer"
+CC-WriteTextFile (Join-Path $stub "scripts\cg_sign_decision_v1.ps1") @'
+param([string]$DecisionPath,[string]$RepoRoot)
+$kg = $(if($env:WINDIR -and (Test-Path -LiteralPath (Join-Path $env:WINDIR "System32\OpenSSH\ssh-keygen.exe"))){ Join-Path $env:WINDIR "System32\OpenSSH\ssh-keygen.exe" } else { (Get-Command ssh-keygen).Source })
+$p = Start-Process -FilePath $kg -ArgumentList ('-Y sign -f "' + $env:CG_DECISION_SIGNER_KEY + '" -n covenant-gate/decision "' + $DecisionPath + '"') -Wait -PassThru -NoNewWindow
+exit $p.ExitCode
+'@
+CC-WriteTextFile (Join-Path $stub "scripts\_lib_cg_decision_sig_v1.ps1") "# stub"
+$r = Child (Join-Path $PSScriptRoot "courier_covenant_gate_pin_v1.ps1") @("-RepoRoot",$Sandbox,"-CovenantGateRoot",$stub); Must ($r.Code -eq 0 -and $r.Text -match "COURIER_COVENANT_GATE_PIN_SIGNER: pinned") ("PIN_STUB_SIGNER:" + $r.Text)
+$env:CG_DECISION_SIGNER_KEY = $gk
+try {
+  $c = New-Case "confidential" "board minutes"
+  $res = Deliver $c @("-CovenantGateRoot",$stub)
+  Expect $res 0 "sent" "POLICY_ALLOW" "gate-invoke-allow-signed-by-gate"
+  Must (CC-HasProp (CC-ReadJsonFile (Join-Path $res.Out "delivery.json")) "covenant_gate_decision") "INVOKE_GATE_DECISION_CARRIED"
+  Add-Content -LiteralPath (Join-Path $stub "scripts\cg_sign_decision_v1.ps1") -Value "# changed after pinning"
+  $c = New-Case "confidential" "board minutes"
+  Expect (Deliver $c @("-CovenantGateRoot",$stub)) 42 "rejected" "COVENANT_GATE_REFUSED:COVENANT_GATE_PIN_MISMATCH" "gate-invoke-pinned-signer-changed"
+} finally { $env:CG_DECISION_SIGNER_KEY = $null }
 Add-Content -LiteralPath (Join-Path $stub "scripts\_lib_covenantgate_eval_v1.ps1") -Value "# changed after pinning"
 $c = New-Case "confidential" "board minutes"
 Expect (Deliver $c @("-CovenantGateRoot",$stub)) 42 "rejected" "COVENANT_GATE_REFUSED:COVENANT_GATE_PIN_MISMATCH" "gate-invoke-pinned-files-changed"
@@ -350,6 +389,7 @@ $rl = Join-Path $Run "chain-tamper\receipts.ndjson"; $cl = Join-Path $Run "chain
 CC-EnsureDir (Split-Path -Parent $rl)
 Copy-Item -LiteralPath (Join-Path $Sandbox "proofs\receipts\covenant_courier_product.ndjson") -Destination $rl
 Copy-Item -LiteralPath (Join-Path $Sandbox "proofs\receipts\covenant_courier_product.chain.ndjson") -Destination $cl
+foreach($x in @(".head.json",".head.json.sig")){ Copy-Item -LiteralPath (Join-Path $Sandbox ("proofs\receipts\covenant_courier_product.chain.ndjson" + $x)) -Destination ($cl + $x) }
 $ok = Child (Join-Path $PSScriptRoot "courier_receipt_chain_v1.ps1") @("-RepoRoot",$Sandbox,"-ReceiptPath",$rl,"-ChainPath",$cl)
 Must ($ok.Code -eq 0 -and $ok.Text -match "APPENDED: 0") "CHAIN_CLEAN_REVERIFY"
 $lines = [IO.File]::ReadAllText($rl).Split("`n")
@@ -364,6 +404,35 @@ $lines = @([IO.File]::ReadAllText($rl).Split("`n") | Where-Object { $_ -ne "" })
 $bad = Child (Join-Path $PSScriptRoot "courier_receipt_chain_v1.ps1") @("-RepoRoot",$Sandbox,"-ReceiptPath",$rl,"-ChainPath",$cl)
 Must ($bad.Code -ne 0 -and $bad.Text -match "TAMPER_DETECTED") "CHAIN_REMOVAL_DETECTED"
 $Cases++; Write-Host "COVENANT_COURIER_DELIVER_CASE_OK: receipt-removed -> TAMPER_DETECTED"
+
+# The signed head: rewriting log and chain together (consistently re-chained) still fails without the
+# receipt key, and so does dropping the head, or the head's signature.
+$hl = Join-Path $Run "chain-head"; CC-EnsureDir $hl
+$hr = Join-Path $hl "receipts.ndjson"; $hc = Join-Path $hl "chain.ndjson"
+Copy-Item -LiteralPath (Join-Path $Sandbox "proofs\receipts\covenant_courier_product.ndjson") -Destination $hr
+Copy-Item -LiteralPath (Join-Path $Sandbox "proofs\receipts\covenant_courier_product.chain.ndjson") -Destination $hc
+foreach($x in @(".head.json",".head.json.sig")){ Copy-Item -LiteralPath (Join-Path $Sandbox ("proofs\receipts\covenant_courier_product.chain.ndjson" + $x)) -Destination ($hc + $x) }
+$ok = Child (Join-Path $PSScriptRoot "courier_receipt_chain_v1.ps1") @("-RepoRoot",$Sandbox,"-ReceiptPath",$hr,"-ChainPath",$hc,"-VerifyOnly")
+Must ($ok.Code -eq 0) ("HEAD_CLEAN:" + $ok.Text)
+# Consistent rewrite: edit receipt 1 and rebuild the chain entries from scratch.
+$lines = @([IO.File]::ReadAllText($hr).Split("`n") | Where-Object { $_ -ne "" })
+$lines[1] = $lines[1].Replace('"rejected"','"accepted"').Replace('"sent"','"accepted"')
+[IO.File]::WriteAllText($hr,(($lines -join "`n") + "`n"))
+$prev = "0" * 64; $chain = New-Object System.Collections.Generic.List[string]
+for($i = 0; $i -lt $lines.Count; $i++){ $rh = CC-Sha256Text $lines[$i]; $ch = CC-Sha256Text ($prev + ":" + $rh); $chain.Add((CC-ToJson ([ordered]@{ schema = "covenant_courier.product_receipt_chain.v1"; index = [int64]$i; previous_chain_hash = $prev; receipt_sha256 = $rh; chain_hash = $ch }))); $prev = $ch }
+[IO.File]::WriteAllText($hc,(($chain.ToArray() -join "`n") + "`n"))
+$bad = Child (Join-Path $PSScriptRoot "courier_receipt_chain_v1.ps1") @("-RepoRoot",$Sandbox,"-ReceiptPath",$hr,"-ChainPath",$hc,"-VerifyOnly")
+Must ($bad.Code -ne 0 -and $bad.Text -match "TAMPER_DETECTED:HEAD_MISMATCH") ("HEAD_REWRITE:" + $bad.Text)
+# Forged head (edited to the rewritten chain) without the key: signature fails.
+$h = CC-ReadJsonFile ($hc + ".head.json"); $h.chain_hash = $prev; $h.entries = [int64]$lines.Count
+CC-WriteTextFile ($hc + ".head.json") (CC-ToCanonicalJson $h)
+$bad = Child (Join-Path $PSScriptRoot "courier_receipt_chain_v1.ps1") @("-RepoRoot",$Sandbox,"-ReceiptPath",$hr,"-ChainPath",$hc,"-VerifyOnly")
+Must ($bad.Code -ne 0 -and $bad.Text -match "TAMPER_DETECTED:HEAD_SIGNATURE") ("HEAD_FORGED:" + $bad.Text)
+# Dropping the head.
+Remove-Item -LiteralPath ($hc + ".head.json"),($hc + ".head.json.sig") -Force
+$bad = Child (Join-Path $PSScriptRoot "courier_receipt_chain_v1.ps1") @("-RepoRoot",$Sandbox,"-ReceiptPath",$hr,"-ChainPath",$hc)
+Must ($bad.Code -ne 0 -and $bad.Text -match "HEAD_MISSING") ("HEAD_DROPPED:" + $bad.Text)
+$Cases++; Write-Host "COVENANT_COURIER_DELIVER_CASE_OK: consistent log+chain rewrite, forged head, dropped head -> refused (receipt key required)"
 
 # ---------------------------------------------------------------- receive (real repository)
 $r = Child (Join-Path $RepoRoot "courier.ps1") @("send","-RepoRoot",$RepoRoot,"-PayloadText","receive selftest payload")

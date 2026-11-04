@@ -14,6 +14,7 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "_lib_covenant_courier_product_v1.ps1")
 . (Join-Path $PSScriptRoot "_lib_courier_vtp2_v1.ps1")
 . (Join-Path $PSScriptRoot "_lib_courier_policy_eval_v1.ps1")
+. (Join-Path $PSScriptRoot "_lib_courier_covenant_gate_v1.ps1")
 
 $RepoRoot = (Resolve-Path $RepoRoot).Path
 # Code comes from this installation, never from the data root.
@@ -142,7 +143,7 @@ try {
   if((CC-Sha256File $envPath) -cne [string]$frame.payload_sha256){ throw "FRAME_HASH_MISMATCH" }
   $envelope = CC-ReadJsonFile $envPath -MaxBytes 1200000
   if(-not (CC-HasProp $envelope "schema") -or [string]$envelope.schema -cne "covenant_courier.delivery.v1"){ throw "NOT_A_DELIVERY_ENVELOPE" }
-  CC-RequireExactProps $envelope @("schema","message","policy_decision","notification") @("payload_b64","payload_vtp2_b64") "ENVELOPE"
+  CC-RequireExactProps $envelope @("schema","message","policy_decision","notification") @("payload_b64","payload_vtp2_b64","covenant_gate_decision") "ENVELOPE"
   $hasPlain = CC-HasProp $envelope "payload_b64"; $hasSealed = CC-HasProp $envelope "payload_vtp2_b64"
   if($hasPlain -eq $hasSealed){ throw "ENVELOPE_PAYLOAD_FORM" }
   $m = $envelope.message
@@ -207,6 +208,29 @@ try {
   $org = $(if(CC-HasProp $m "organization_id"){ [string]$m.organization_id } else { "" })
   $again = CCP-EvaluateLocal -RepoRoot $RepoRoot -Profile $rprof -PayloadBytes $payloadBytes -RecipientNodeId $NodeId -Fields @([string]$m.notification_preview,[string]$m.sender_identity,[string]$m.recipient_identity,$org)
   if(@("allow","redact_notification") -cnotcontains $again.Decision){ throw ("RECEIVER_POLICY_" + $again.Decision.ToUpperInvariant() + ":" + $again.Reason) }
+  # Covenant Gate: the receiver's own profile says whether the gate is required. Its decision is accepted
+  # only as Covenant Gate signed it (the profile's covenant_gate_signer, namespace covenant-gate/decision),
+  # for this message (input_hash rebuilt here from this node's registry principals), as an allow, under
+  # the Covenant Gate policy this node pinned (policy_hash).
+  $rGate = [string]$rprof.covenant_gate
+  $hasGate = CC-HasProp $envelope "covenant_gate_decision"
+  if($rGate -ceq "required" -and -not $hasGate){ throw "RECEIVER_GATE_DECISION_MISSING" }
+  if($hasGate){
+    $gd = $envelope.covenant_gate_decision
+    CC-RequireExactProps $gd @("decision_b64","signature_b64","signer") @() "GATE_DECISION"
+    $rSigner = $(if(CC-HasProp $rprof "covenant_gate_signer"){ [string]$rprof.covenant_gate_signer } else { "" })
+    if([string]::IsNullOrWhiteSpace($rSigner)){ throw "RECEIVER_GATE_SIGNER_NOT_CONFIGURED" }
+    if([string]$gd.signer -cne $rSigner){ throw "RECEIVER_GATE_SIGNER_MISMATCH" }
+    try { $gdBytes = [Convert]::FromBase64String([string]$gd.decision_b64); $gsBytes = [Convert]::FromBase64String([string]$gd.signature_b64) } catch { throw "RECEIVER_GATE_DECISION_NOT_BASE64" }
+    $sNodePath = Join-Path $RepoRoot ("registry\nodes\" + [string]$m.sender_node_id + ".json")
+    $rNodePath = Join-Path $RepoRoot ("registry\nodes\" + $NodeId + ".json")
+    if(-not (Test-Path -LiteralPath $sNodePath -PathType Leaf) -or -not (Test-Path -LiteralPath $rNodePath -PathType Leaf)){ throw "RECEIVER_GATE_NODE_UNKNOWN" }
+    $expectedInput = CCG-InputHash (CCG-BuildEvalInput $m $actual ([string](CC-ReadJsonFile $sNodePath).principal) ([string](CC-ReadJsonFile $rNodePath).principal))
+    $gv = CCG-VerifySignedDecision $RepoRoot $gdBytes $gsBytes $rSigner $expectedInput
+    if($null -ne $gv.Error){ throw ("RECEIVER_GATE_DECISION_INVALID:" + $gv.Error) }
+    if([string]$gv.Output.decision -cne "allow"){ throw "RECEIVER_GATE_DENY" }
+    Write-Host ("COURIER_RECEIVE_COVENANT_GATE_VERIFIED: " + [string]$gv.Output.evaluation_id)
+  }
   $rMode = $(if($again.Decision -ceq "redact_notification" -or [string]$pd.decision -ceq "redact_notification"){ "redacted" } else { [string]$rprof.notification_display_mode })
   $receiverNotification = CCP-BuildNotification $messageId ([string]$m.recipient_identity) $rMode ([string]$m.notification_preview)
 } catch {

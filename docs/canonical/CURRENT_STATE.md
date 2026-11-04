@@ -23,10 +23,11 @@ and integrations proposed for the registry: `docs/proposals/0001-covenant-courie
 
 - Audit 2026-11-04 (`SECURITY.md`): until then the receiver released whatever `policy_decision` the sender
   signed, which conflicted with the canonical role ("no delivery without policy"). The receiver now re-runs
-  local policy; it still does not check Covenant Gate's decision, so for gate-required profiles a holder of the
-  sender node key can deliver what passes local policy without a gate allow. Closing that needs a Covenant
-  Gate-signed decision carried in the envelope (Covenant Gate PR #7 adds the signer). The product receipt chain
-  is unkeyed (tamper-evident against partial edits only).
+  local policy and, for gate-required profiles, verifies Covenant Gate's own signed decision for that message
+  under the pinned gate policy. A required-gate delivery in invoke mode needs Covenant Gate's decision signer
+  (Covenant Gate PR #7, not yet merged) and the NeverLost key for `single-tenant/device_agent/covenant-gate`;
+  until then such deliveries wait for approval. The receipt chain head is signed by a local key; rollback of
+  the whole state needs an outside witness.
 
 - Developer preview. Not a production E2E messenger; see `SECURITY.md` and
   `docs/SECURITY_HARDENING_PLAN.md`. Product delivery frames are signed and hash-bound but not

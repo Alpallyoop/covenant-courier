@@ -143,18 +143,33 @@ The release includes public allowed-signers material for verifying bundled previ
   ignores stray datagrams; the unused, unvalidated `vtp_udp_wire_listen_once_v1.ps1` was removed. IDs that
   become folder names refuse a trailing dot and reserved device names.
 
-## Open items (not fixed by this audit)
+## Closed later on 2026-11-04
 
-- **Receiver-side gate evidence.** The receiver does not see or check Covenant Gate's decision; a holder of
-  the sender node key can still deliver a message that passes the receiver's local policy without a gate
-  allow. Fix: carry a Covenant Gate decision signed by Covenant Gate's own key (Covenant Gate PR #7 adds a
-  decision signer) in the envelope and verify it on receive for gate-required profiles.
-- **Receipt chain has no key.** Anyone who can write the receipt files can extend or rewrite both
-  consistently. Fix: sign the chain head, or have it witnessed (NeverLost or Constellation).
-- **Signed Covenant Gate documents have no freshness or policy pin** (an old allow for the same input stays
-  valid). Fix: pin the expected `policy_hash` and add an expiry.
-- **VTP v2 binding fingerprints** given for a two-machine session are recorded, not checked against VTP v2
-  state; the VTP v2 trust step is the only pin.
-- **JSON parsing** keeps the last of duplicate keys on PowerShell 7.
+- **Receiver-side gate evidence.** When Covenant Gate allows a delivery and signs its decision, the envelope
+  carries it (`covenant_gate_decision`: the exact `covenantgate.eval_output.v1` bytes, the signature, the
+  signer). A receiver whose own profile requires the gate refuses an envelope without it, and checks the
+  signature (the profile's `covenant_gate_signer`, namespace `covenant-gate/decision`, against its trust roots),
+  the `input_hash` rebuilt from the message and its own registry principals, `decision: allow`, and the pinned
+  policy hash. In invoke mode the sender has the pinned Covenant Gate checkout sign the decision with its own
+  NeverLost-issued key (`scripts/cg_sign_decision_v1.ps1`, Covenant Gate PR #7; pinned and run from the checked
+  bytes); without that signer a required-gate delivery waits for approval
+  (`COVENANT_GATE_DECISION_UNSIGNED`). The shipped `confidential` profile names
+  `single-tenant/device_agent/covenant-gate` as the signer; its key reaches the trust roots through a NeverLost
+  trust import.
+- **Signed receipt chain head.** After every append the chain's entry count and hash are signed by the
+  installation's receipt signer (`courier-receipts@local`, namespace `courier/receipt-chain`, key created on
+  first use, owner-only). Every chain run checks it; rewriting the log and chain together, forging the head or
+  dropping it is refused. Restoring an older signed state as a whole still needs an outside witness.
+- **Gate decisions are bound to the current gate policy.** `courier.ps1 cg-pin` records the Covenant Gate
+  `policy_hash` (probed from the pinned evaluator, or given with `-PolicyHash` on a node without a checkout);
+  decisions under any other policy are refused on send and on receive (`CG_POLICY_NOT_PINNED`,
+  `CG_POLICY_HASH_NOT_PINNED`). A decision is also bound to one message (message id, payload hash, session,
+  principals), so it cannot be reused for another. It carries no time, so within one Covenant Gate policy a
+  decision for a message stays valid until that message is delivered once (inbox entries are created once).
 
-Do not treat preview trust material as production identity infrastructure.
+## Still open
+
+- Restoring the whole receipt state to an earlier signed point needs an outside witness (NeverLost or
+  Constellation).
+- VTP v2 binding fingerprints given for a two-machine session are recorded, not checked against VTP v2 state.
+- JSON parsing keeps the last of duplicate keys on PowerShell 7.

@@ -17,6 +17,7 @@ $Expected = @(
   "covenant_courier.product_policy.v1.json",
   "covenant_courier.product_receipt_chain.v1.json",
   "covenant_courier.vtp2_binding.v1.json",
+  "covenant_courier.receipt_chain_head.v1.json",
   "covenant_courier.settings.v1.json"
 )
 
